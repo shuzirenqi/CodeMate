@@ -1,6 +1,7 @@
 package com.codemate.cli;
 
 import com.codemate.agent.Agent;
+import com.codemate.agent.AgentOrchestrator;
 import com.codemate.agent.PlanExecuteAgent;
 import com.codemate.plan.ExecutionPlan;
 import com.codemate.rag.CodeIndex;
@@ -27,11 +28,11 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * CodeMate v4.0 - RAG-Enhanced Agent CLI
- * 支持 ReAct、Plan-and-Execute、Memory 与 RAG 能力
+ * CodeMate v5.0.0 - Multi-Agent Collaborative CLI
+ * 支持 ReAct、Plan-and-Execute、Memory、RAG 与 Multi-Agent 能力
  */
 public class Main {
-    private static final String VERSION = "0.5.0";
+    private static final String VERSION = "0.6.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "codemate.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "codemate.log.level";
@@ -115,13 +116,14 @@ public class Main {
             Agent reactAgent = new Agent(apiKey);
             System.out.println("🔄 使用 ReAct 模式\n");
             boolean nextTaskUsePlanMode = false;
+            boolean nextTaskUseTeamMode = false;
 
             printStartupHints();
 
             while (true) {
                 PromptInput promptInput;
                 try {
-                    promptInput = readPromptInput(terminal, lineReader, nextTaskUsePlanMode);
+                    promptInput = readPromptInput(terminal, lineReader, nextTaskUsePlanMode || nextTaskUseTeamMode);
                 } catch (UserInterruptException e) {
                     continue;  // Ctrl+C 跳过
                 } catch (EndOfFileException e) {
@@ -132,6 +134,10 @@ public class Main {
                     if (nextTaskUsePlanMode) {
                         nextTaskUsePlanMode = false;
                         System.out.println("↩️ 已取消待执行的 Plan-and-Execute，回到默认 ReAct。\n");
+                    }
+                    if (nextTaskUseTeamMode) {
+                        nextTaskUseTeamMode = false;
+                        System.out.println("↩️ 已取消待执行的 Multi-Agent，回到默认 ReAct。\n");
                     }
                     continue;
                 }
@@ -146,7 +152,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/plan /clear /memory /save /index /search /graph /exit\n");
+                        System.out.println("可用命令：/plan /team /clear /memory /save /index /search /graph /exit\n");
                         continue;
                     }
                     case EXIT -> {
@@ -178,6 +184,14 @@ public class Main {
                         if (command.payload() == null || command.payload().isEmpty()) {
                             nextTaskUsePlanMode = true;
                             System.out.println("📋 下一条任务将使用 Plan-and-Execute 模式，输入任务前按 ESC 可取消，执行完成后自动回到默认 ReAct。\n");
+                            continue;
+                        }
+                        input = command.payload();
+                    }
+                    case SWITCH_TEAM -> {
+                        if (command.payload() == null || command.payload().isEmpty()) {
+                            nextTaskUseTeamMode = true;
+                            System.out.println("👥 下一条任务将使用 Multi-Agent 协作模式（规划者 + 执行者 + 检查者），输入任务前按 ESC 可取消，执行完成后自动回到默认 ReAct。\n");
                             continue;
                         }
                         input = command.payload();
@@ -263,6 +277,10 @@ public class Main {
                     PlanExecuteAgent planAgent = createPlanAgent(apiKey, terminal, lineReader);
                     response = planAgent.run(input);
                     nextTaskUsePlanMode = false;
+                } else if (nextTaskUseTeamMode || command.type() == CliCommandParser.CommandType.SWITCH_TEAM) {
+                    AgentOrchestrator orchestrator = createTeamAgent(apiKey, reactAgent);
+                    response = orchestrator.run(input);
+                    nextTaskUseTeamMode = false;
                 } else {
                     response = reactAgent.run(input);
                 }
@@ -283,6 +301,14 @@ public class Main {
     private static PlanExecuteAgent createPlanAgent(String apiKey, Terminal terminal, LineReader lineReader) {
         System.out.println("📋 使用 Plan-and-Execute 模式\n");
         return new PlanExecuteAgent(apiKey, createPlanReviewHandler(terminal, lineReader));
+    }
+
+    private static AgentOrchestrator createTeamAgent(String apiKey, Agent reactAgent) {
+        System.out.println("👥 使用 Multi-Agent 协作模式\n");
+        // 复用 reactAgent 的 ToolRegistry 和 MemoryManager：
+        // - ToolRegistry 共享意味着 /index 设置的项目路径同步到 Multi-Agent
+        // - MemoryManager 共享避免重复加载长期记忆，且 /team 结果会进入同一会话上下文
+        return new AgentOrchestrator(apiKey, reactAgent.getToolRegistry(), reactAgent.getMemoryManager());
     }
 
     private static PromptInput readPromptInput(Terminal terminal, LineReader lineReader, boolean allowEscCancel)
@@ -510,6 +536,8 @@ public class Main {
                 "输入你的问题或任务",
                 "输入 '/plan' 后，下一条任务使用 Plan-and-Execute 模式",
                 "输入 '/plan 任务内容' 直接用计划模式执行这条任务",
+                "输入 '/team' 后，下一条任务使用 Multi-Agent 协作模式",
+                "输入 '/team 任务内容' 直接用多 Agent 协作执行这条任务",
                 "计划生成后可直接执行、补充要求重规划，或取消",
                 "输入 '/index [路径]' 为代码库建立向量索引",
                 "输入 '/search <查询>' 语义检索代码",
@@ -707,7 +735,7 @@ public class Main {
         System.out.println("╔══════════════════════════════════════════════════════════╗");
         System.out.println("║                                                          ║");
         System.out.println("║                        CodeMate                          ║");
-        System.out.printf("║              Streaming Agent CLI %-8s                ║%n", "v" + VERSION);
+        System.out.printf("║                Multi-Agent CLI %-8s                  ║%n", "v" + VERSION);
         System.out.println("║                                                          ║");
         System.out.println("╚══════════════════════════════════════════════════════════╝");
         System.out.println();

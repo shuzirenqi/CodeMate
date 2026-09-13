@@ -2,7 +2,7 @@
 
 CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言驱动代码阅读、文件修改、命令执行和项目创建。
 
-当前版本：**v0.5.0 — 流式输出、终端渲染与日志**。
+当前版本：**v0.6.0 — Multi-Agent 协作**。
 
 ## 当前能力
 
@@ -25,6 +25,9 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 - **流式模型响应**：使用 SSE 增量解析模型返回的思考内容、回复文本、工具参数片段和 Token 用量。
 - **终端内容渲染**：将标题、列表、引用、表格和代码块等常见 Markdown 转换成适合终端阅读的样式。
 - **运行日志**：使用 Logback 将执行信息写入文件，支持按日期和大小滚动、压缩及容量清理。
+- **角色化协作**：Planner 负责拆解目标，Worker 调用工具执行，Reviewer 检查结果并提出反馈。
+- **编排与并行**：Orchestrator 根据步骤依赖调度任务，默认使用 2 个 Worker 并行处理同批独立步骤。
+- **审查反馈闭环**：Reviewer 不通过时，将问题和建议交回 Worker，每个步骤最多重试 2 次。
 
 ## 快速开始
 
@@ -34,7 +37,7 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 Copy-Item .env.example .env
 # 编辑 .env，填写 GLM_API_KEY
 mvn clean package
-java -jar target/codemate-0.5.0.jar
+java -jar target/codemate-0.6.0.jar
 ```
 
 API Key 的读取顺序为：当前目录 `.env`、用户主目录 `.env`、环境变量 `GLM_API_KEY`。`.env` 已加入 Git 忽略规则。
@@ -68,6 +71,8 @@ API Key 的读取顺序为：当前目录 `.env`、用户主目录 `.env`、环�
 | --- | --- |
 | `/memory` / `/mem` | 查看短期、长期记忆及 Token 使用状态 |
 | `/save <事实>` | 将指定事实写入长期记忆 |
+| `/team` | 让下一条任务使用 Multi-Agent 协作模式 |
+| `/team <任务>` | 直接使用 Multi-Agent 执行任务 |
 | `/clear` | 提取当前会话中的关键事实，然后清空短期历史 |
 | `/index [路径]` | 为指定路径建立或重建代码索引，默认当前目录 |
 | `/search <查询>` | 使用自然语言混合检索代码 |
@@ -94,6 +99,8 @@ flowchart TD
 
 Plan 中的每个任务仍然可以多轮调用工具，单任务最多执行 5 轮。计划只负责组织任务，实际文件和命令操作仍由统一工具注册表执行。
 
+Multi-Agent 模式由编排器统一维护步骤状态：Planner 输出 JSON 计划，Worker 执行当前依赖已满足的步骤，Reviewer 审查每一步结果。并行步骤先写入独立缓冲区，再按步骤顺序输出，避免多个 Agent 的终端内容交错。
+
 ## 代码结构
 
 ```text
@@ -101,7 +108,10 @@ src/main/java/com/codemate/
 ├── cli/                  终端入口、命令解析、计划审阅输入
 ├── agent/
 │   ├── Agent.java        ReAct 执行循环
-│   └── PlanExecuteAgent.java
+│   ├── PlanExecuteAgent.java
+│   ├── AgentOrchestrator.java
+│   ├── SubAgent.java
+│   └── AgentRole.java / AgentMessage.java
 ├── plan/                 Planner、任务模型与 DAG 执行计划
 ├── memory/               短期/长期记忆、检索、预算与摘要压缩
 ├── rag/                  分块、AST 分析、Embedding、SQLite 与检索
@@ -124,12 +134,14 @@ src/main/java/com/codemate/
 - 重规划只在执行异常且当前进度不足 50% 时触发，不是每一步之后都进行全局判断。
 - 当前模型配置固定在代码中；单任务内部工具调用仍为串行执行。
 - 流式输出依赖上游返回 OpenAI 兼容的 SSE 数据和 `reasoning_content` 字段；接口不返回推理内容时只展示回复。
+- Planner、Worker 和 Reviewer 当前共享同一个模型客户端，通过系统提示词、工具权限和独立历史区分角色。
+- Reviewer 属于模型判断，不等同于编译和测试等确定性验收；达到重试上限后会保留当前结果并继续汇总。
 - Memory 有独立的容量和压缩机制，Agent 实际请求消息历史尚未进行统一裁剪。
 - 自动事实提取依赖模型判断，可能保存临时信息；当前只能整体清理持久化文件，缺少单条编辑命令。
 - 建索引需要可用的 Embedding 服务；索引过程逐文件执行，大型仓库尚未做增量更新和批量向量化。
 - Java 关系分析基于语法结构和名称匹配，不进行完整的类型与符号求解。
 - 文件写入和命令执行直接生效，尚未加入人工审批、沙箱和命令级超时。
-- 尚未实现 Multi-Agent 和 MCP。
+- 尚未实现 MCP。
 
 ## 版本记录
 

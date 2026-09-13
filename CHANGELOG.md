@@ -1,5 +1,18 @@
 # 版本记录
 
+## v0.6.0 — Multi-Agent 协作
+
+- 新增 Planner、Worker、Reviewer 三类子 Agent 和角色化系统提示词。
+- 新增 Orchestrator，解析计划并根据依赖调度步骤。
+- 默认通过 2 个 Worker 并行执行同批独立任务，并按步骤顺序展示缓冲输出。
+- Reviewer 审查执行结果，不通过时携带反馈重新执行，每步最多重试 2 次。
+- Worker 可以使用完整工具集；Planner 和 Reviewer 不接收工具定义。
+- Multi-Agent 复用 ReAct 的 ToolRegistry 和 MemoryManager，并将最终结果写回记忆。
+- 增加 Agent 消息、角色、子 Agent、编排器和工具行为测试。
+- 保留 Windows RAG 项目路径规范化修复。
+
+验证结果：`mvn clean package` 通过，123 个测试全部通过；`ToolRegistryTest` 连续运行 3 次通过；使用占位 Key 完成启动和退出检查，未触发真实模型或 Embedding 请求。
+
 ## v0.5.0 — 流式输出、终端渲染与日志
 
 - GLM 客户端切换为 SSE 流式读取，增量合并回复、推理内容和工具调用参数。
