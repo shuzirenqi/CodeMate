@@ -2,10 +2,10 @@
 
 ## 当前阶段
 
-- v0.1.0：基础 ReAct 与 5 个工具；Java 17、Maven。
-- 入口：`com.codemate.cli.Main`；产物：`target/codemate-0.1.0.jar`。
-- 源阶段映射及整体迭代目标见 `CHANGELOG.md`。
-- `E:\ProjectCode\paicli` 为参照仓库，不修改其工作区。
+- v0.2.0：ReAct、Plan-and-Execute、DAG 调度与 5 个工具；Java 17、Maven。
+- 入口：`com.codemate.cli.Main`；产物：`target/codemate-0.2.0.jar`。
+- 版本能力与验证记录见 `CHANGELOG.md`，来源信息见 `NOTICE.md`。
+- 参照仓库只用于读取阶段快照，不修改其工作区。
 
 ## 迭代规则
 
@@ -19,5 +19,5 @@
 ## 验证
 
 - 每阶段至少执行 `mvn clean package`，有测试时检查测试结果。
-- 当前没有自动化测试；不得将构建通过描述成模型联调通过。
-- 基础版本 Shell 无审批或超时，验证避免真实危险操作和长时间命令。
+- 当前包含 CLI 解析、输入处理和 DAG 计划测试；不得将单元测试通过描述成模型联调通过。
+- 当前 Shell 无审批或超时，验证避免真实危险操作和长时间命令。
