@@ -2,7 +2,7 @@
 
 CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言驱动代码阅读、文件修改、命令执行和项目创建。
 
-当前版本：**v0.4.0 — RAG 代码库索引与检索**。
+当前版本：**v0.5.0 — 流式输出、终端渲染与日志**。
 
 ## 当前能力
 
@@ -22,6 +22,9 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 - **混合检索**：融合余弦语义检索与关键词匹配，对类、方法及双通道命中结果加权。
 - **代码关系图**：使用 JavaParser 分析 imports、extends、implements、calls 和 contains 关系。
 - **Agent 检索工具**：将 `search_code` 注册为工具，让 ReAct 和 Plan 在需要时查询代码库。
+- **流式模型响应**：使用 SSE 增量解析模型返回的思考内容、回复文本、工具参数片段和 Token 用量。
+- **终端内容渲染**：将标题、列表、引用、表格和代码块等常见 Markdown 转换成适合终端阅读的样式。
+- **运行日志**：使用 Logback 将执行信息写入文件，支持按日期和大小滚动、压缩及容量清理。
 
 ## 快速开始
 
@@ -31,7 +34,7 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 Copy-Item .env.example .env
 # 编辑 .env，填写 GLM_API_KEY
 mvn clean package
-java -jar target/codemate-0.4.0.jar
+java -jar target/codemate-0.5.0.jar
 ```
 
 API Key 的读取顺序为：当前目录 `.env`、用户主目录 `.env`、环境变量 `GLM_API_KEY`。`.env` 已加入 Git 忽略规则。
@@ -102,6 +105,7 @@ src/main/java/com/codemate/
 ├── plan/                 Planner、任务模型与 DAG 执行计划
 ├── memory/               短期/长期记忆、检索、预算与摘要压缩
 ├── rag/                  分块、AST 分析、Embedding、SQLite 与检索
+├── util/                 ANSI 样式、Jieba 工厂与终端 Markdown 渲染
 ├── llm/GLMClient.java    模型请求和响应解析
 └── tool/ToolRegistry.java
 ```
@@ -110,13 +114,16 @@ src/main/java/com/codemate/
 
 代码索引默认保存在 `~/.codemate/rag/codebase.db`，可以通过 JVM 属性 `-Dcodemate.rag.dir=<目录>` 修改位置。Embedding 默认使用 `ollama`、`nomic-embed-text:latest` 和 `http://localhost:11434`，也可以通过 `.env.example` 中的配置切换远程兼容接口。
 
-技术栈：Java 17、Maven、JLine、Jackson、OkHttp、Jieba、JavaParser、SQLite、Ollama、JUnit 5、SLF4J。
+日志默认写入 `~/.codemate/logs/codemate.log`。日志级别、目录、保留天数、单文件大小和总容量可以通过 `CODEMATE_LOG_*` 环境变量或对应的 `codemate.log.*` JVM 属性调整。
+
+技术栈：Java 17、Maven、JLine、Jackson、OkHttp + SSE、Jieba、JavaParser、SQLite、Ollama、Logback、JUnit 5。
 
 ## 当前边界
 
 - ReAct 与 Plan 由用户选择，尚未实现按任务复杂度自动路由。
 - 重规划只在执行异常且当前进度不足 50% 时触发，不是每一步之后都进行全局判断。
-- 当前模型配置固定在代码中；模型请求和单任务内部工具调用仍为串行执行。
+- 当前模型配置固定在代码中；单任务内部工具调用仍为串行执行。
+- 流式输出依赖上游返回 OpenAI 兼容的 SSE 数据和 `reasoning_content` 字段；接口不返回推理内容时只展示回复。
 - Memory 有独立的容量和压缩机制，Agent 实际请求消息历史尚未进行统一裁剪。
 - 自动事实提取依赖模型判断，可能保存临时信息；当前只能整体清理持久化文件，缺少单条编辑命令。
 - 建索引需要可用的 Embedding 服务；索引过程逐文件执行，大型仓库尚未做增量更新和批量向量化。

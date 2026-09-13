@@ -2,8 +2,8 @@
 
 ## 当前阶段
 
-- v0.4.0：ReAct、Plan-and-Execute、DAG、Memory、RAG 与 6 个工具；Java 17、Maven。
-- 入口：`com.codemate.cli.Main`；产物：`target/codemate-0.4.0.jar`。
+- v0.5.0：ReAct、Plan-and-Execute、Memory、RAG、SSE 流式输出、终端渲染与文件日志；Java 17、Maven。
+- 入口：`com.codemate.cli.Main`；产物：`target/codemate-0.5.0.jar`。
 - 版本能力与验证记录见 `CHANGELOG.md`，来源信息见 `NOTICE.md`。
 - 参照仓库只用于读取阶段快照，不修改其工作区。
 
@@ -19,5 +19,5 @@
 ## 验证
 
 - 每阶段至少执行 `mvn clean package`，有测试时检查测试结果。
-- 当前包含 CLI、Plan、Memory 和 RAG 测试；不得将单元测试通过描述成真实模型或 Embedding 联调通过。
+- 当前包含 CLI、Plan、Memory、RAG 和终端渲染测试；不得将单元测试通过描述成真实模型或 Embedding 联调通过。
 - 当前 Shell 无审批或超时，验证避免真实危险操作和长时间命令。
