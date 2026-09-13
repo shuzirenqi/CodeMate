@@ -1,5 +1,17 @@
 # 版本记录
 
+## v0.4.0 — RAG 代码库索引与检索
+
+- 新增代码扫描及文件、Java 类、方法三级分块。
+- 使用 JavaParser 提取代码结构和关系图谱。
+- 支持 Ollama 与 OpenAI 兼容 Embedding 接口，并使用 SQLite 持久化向量和关系。
+- 融合余弦语义检索与关键词检索，加入命中及代码类型加权和单文件数量限制。
+- 新增 `/index`、`/search`、`/graph` 命令和 `search_code` Agent 工具。
+- 统一 SQLite 中的项目路径表示，修复 Windows 下写入索引后无法通过等价路径检索的问题。
+- 增加 RAG 核心模块测试。
+
+验证结果：`mvn clean package` 通过，72 个测试全部通过；使用占位 Key 完成启动和退出检查，未调用真实模型或 Embedding 服务。
+
 ## v0.3.0 — Memory 与上下文管理
 
 - 新增短期记忆、长期记忆和 4 种记忆条目类型。
