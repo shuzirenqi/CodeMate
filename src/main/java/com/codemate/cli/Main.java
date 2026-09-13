@@ -30,11 +30,11 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * CodeMate v6.0.0 - Human-in-the-Loop CLI
- * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent 与 HITL 审批能力
+ * CodeMate v0.8.0 - Async Tool CLI
+ * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL 与并行工具调用能力
  */
 public class Main {
-    private static final String VERSION = "0.7.0";
+    private static final String VERSION = "0.8.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "codemate.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "codemate.log.level";
@@ -781,7 +781,7 @@ public class Main {
         System.out.println("╔══════════════════════════════════════════════════════════╗");
         System.out.println("║                                                          ║");
         System.out.println("║                        CodeMate                          ║");
-        System.out.printf("║                HITL Approval CLI %-24s║%n", "v" + VERSION);
+        System.out.printf("║                Async Tool CLI %-27s║%n", "v" + VERSION);
         System.out.println("║                                                          ║");
         System.out.println("╚══════════════════════════════════════════════════════════╝");
         System.out.println();
