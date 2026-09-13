@@ -2,6 +2,8 @@ package com.codemate.cli;
 
 import com.codemate.agent.Agent;
 import com.codemate.agent.PlanExecuteAgent;
+import com.codemate.llm.GLMClient;
+import com.codemate.llm.LlmClient;
 import com.codemate.memory.MemoryManager;
 import com.codemate.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
@@ -14,12 +16,13 @@ class MainPlanAgentFactoryTest {
 
     @Test
     void planModeReusesReactToolRegistryAndMemoryManager() throws Exception {
+        LlmClient llmClient = new GLMClient("test-key");
         ToolRegistry sharedToolRegistry = new ToolRegistry();
-        Agent reactAgent = new Agent("test-key", sharedToolRegistry);
+        Agent reactAgent = new Agent(llmClient, sharedToolRegistry);
         MemoryManager sharedMemoryManager = reactAgent.getMemoryManager();
 
         PlanExecuteAgent planAgent = Main.createPlanAgent(
-                "test-key",
+                llmClient,
                 reactAgent,
                 (goal, plan) -> PlanExecuteAgent.PlanReviewDecision.cancel()
         );

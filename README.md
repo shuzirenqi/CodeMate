@@ -2,7 +2,7 @@
 
 CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言驱动代码阅读、文件修改、命令执行和项目创建。
 
-当前版本：**v0.8.0 — 异步执行与并行工具调用**。
+当前版本：**v0.9.0 — 多模型适配与运行时切换**。
 
 ## 当前能力
 
@@ -33,19 +33,23 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 - **并行工具调用**：同一轮模型返回的多个独立工具调用由固定线程池并行执行，默认最多 4 个并发。
 - **有序结果回灌**：并发任务完成后仍按原始 `tool_call` 顺序写回消息历史，避免破坏模型工具调用协议。
 - **批次超时**：工具批次具有统一超时兜底，超时任务会被取消并转换为可供模型继续判断的工具结果。
+- **统一模型接口**：通过 `LlmClient` 隔离对话、流式输出、工具定义和 Token 统计，上层 Agent 不再依赖具体厂商客户端。
+- **双模型 Provider**：内置 GLM 和 DeepSeek 客户端，共用 OpenAI 兼容请求与 SSE 解析基类。
+- **运行时切换**：使用 `/model glm` 或 `/model deepseek` 切换当前模型，同时保留已有对话、Memory 和工具状态。
+- **上下文状态**：通过 `/context` 查看消息角色数量、对话轮次、字符量和 Memory Token 状态。
 
 ## 快速开始
 
-需要 Java 17+、Maven 和 GLM API Key。Shell 工具依赖 PATH 中可用的 `bash`，Windows 可以使用 Git Bash 环境。
+需要 Java 17+、Maven，以及至少一个 GLM 或 DeepSeek API Key。Shell 工具依赖 PATH 中可用的 `bash`，Windows 可以使用 Git Bash 环境。
 
 ```powershell
 Copy-Item .env.example .env
 # 编辑 .env，填写 GLM_API_KEY
 mvn clean package
-java -jar target/codemate-0.8.0.jar
+java -jar target/codemate-0.9.0.jar
 ```
 
-API Key 的读取顺序为：当前目录 `.env`、用户主目录 `.env`、环境变量 `GLM_API_KEY`。`.env` 已加入 Git 忽略规则。
+模型配置从 `~/.codemate/config.json`、环境变量和 `.env` 读取。至少配置 `GLM_API_KEY` 或 `DEEPSEEK_API_KEY`；模型名可分别通过 `GLM_MODEL` 和 `DEEPSEEK_MODEL` 指定。`.env` 已加入 Git 忽略规则。
 
 ## 使用方式
 
@@ -74,6 +78,9 @@ API Key 的读取顺序为：当前目录 `.env`、用户主目录 `.env`、环�
 
 | 命令 | 行为 |
 | --- | --- |
+| `/model` | 查看当前模型和可用 Provider |
+| `/model glm` / `/model deepseek` | 切换模型并保存默认 Provider |
+| `/context` / `/ctx` | 查看当前对话上下文与 Memory 状态 |
 | `/memory` / `/mem` | 查看短期、长期记忆及 Token 使用状态 |
 | `/memory clear` | 清空长期记忆 |
 | `/save <事实>` | 将指定事实写入长期记忆 |
@@ -113,11 +120,14 @@ HITL 默认关闭。启用后，统一工具注册表会在危险工具执行前
 
 ReAct、Plan 的单任务执行器和 Multi-Agent Worker 都通过 `ToolRegistry.executeTools()` 执行一轮工具请求。模型必须把有依赖关系的操作拆到不同轮次；同一轮只适合读取多个文件、列出多个目录等互不依赖的操作。HITL 审批仍会串行读取终端输入，避免多个并发工具同时争抢 stdin/stdout。
 
+切换模型时，主 ReAct Agent 会替换 `LlmClient`，MemoryManager 同步使用新客户端；之后新建的 Plan 和 Multi-Agent 执行器也会使用当前模型。默认 Provider 会写入 `~/.codemate/config.json`，API Key 仍建议放在环境变量或 `.env` 中。
+
 ## 代码结构
 
 ```text
 src/main/java/com/codemate/
 ├── cli/                  终端入口、命令解析、计划审阅输入
+├── config/               Provider、模型与本地默认配置
 ├── agent/
 │   ├── Agent.java        ReAct 执行循环
 │   ├── PlanExecuteAgent.java
@@ -129,7 +139,7 @@ src/main/java/com/codemate/
 ├── rag/                  分块、AST 分析、Embedding、SQLite 与检索
 ├── hitl/                 风险分级、审批请求、终端交互与工具拦截
 ├── util/                 ANSI 样式、Jieba 工厂与终端 Markdown 渲染
-├── llm/GLMClient.java    模型请求和响应解析
+├── llm/                  统一接口、兼容基类、GLM 与 DeepSeek 客户端
 └── tool/ToolRegistry.java
 ```
 
@@ -145,7 +155,9 @@ src/main/java/com/codemate/
 
 - ReAct 与 Plan 由用户选择，尚未实现按任务复杂度自动路由。
 - 重规划只在执行异常且当前进度不足 50% 时触发，不是每一步之后都进行全局判断。
-- 当前模型配置固定在代码中；工具并行上限和批次超时仍是代码内默认值，尚未提供 CLI 配置。
+- 当前只内置 GLM 和 DeepSeek；Provider 的 `baseUrl` 配置字段尚未用于覆盖客户端固定地址。
+- 切换模型会保留对话上下文，不会自动重算或迁移不同模型之间的上下文限制。
+- 工具并行上限和批次超时仍是代码内默认值，尚未提供 CLI 配置。
 - 流式输出依赖上游返回 OpenAI 兼容的 SSE 数据和 `reasoning_content` 字段；接口不返回推理内容时只展示回复。
 - Planner、Worker 和 Reviewer 当前共享同一个模型客户端，通过系统提示词、工具权限和独立历史区分角色。
 - Reviewer 属于模型判断，不等同于编译和测试等确定性验收；达到重试上限后会保留当前结果并继续汇总。

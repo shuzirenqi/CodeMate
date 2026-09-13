@@ -1,5 +1,19 @@
 # 版本记录
 
+## v0.9.0 — 多模型适配与运行时切换
+
+- 抽出 `LlmClient` 接口，统一消息、工具调用、流式监听和响应结构。
+- 新增 OpenAI 兼容客户端基类，集中处理请求构造、SSE 增量解析和工具参数合并。
+- 内置 GLM 与 DeepSeek Provider，并允许通过环境变量或 `.env` 指定 Key 和模型名。
+- 新增 `CodeMateConfig` 和 `LlmClientFactory`，从 `~/.codemate/config.json` 加载默认 Provider。
+- 新增 `/model` 查询与运行时切换命令，切换后保留对话、Memory 和工具状态。
+- 新增 `/context` 命令，显示消息角色、轮次、字符量和 Memory Token 状态。
+- Agent、Planner、Plan、SubAgent、Orchestrator 和 Memory 全部改为依赖统一模型接口。
+- 汇总 ReAct 多轮请求的 Token 用量，并在任务结束时展示耗时。
+- 保留并行工具入口以及 Windows Shell 进程树清理增强。
+
+验证结果：`mvn clean package` 通过，183 个测试全部通过；使用隔离用户目录和占位 GLM Key 验证 `/model`、`/context` 及未配置 DeepSeek 时的失败分支，未触发真实 Provider API 或 Embedding 请求。
+
 ## v0.8.0 — 异步执行与并行工具调用
 
 - 新增 `ToolRegistry.executeTools()`，同一轮最多并行执行 4 个独立工具调用。

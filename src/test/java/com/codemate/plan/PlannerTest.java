@@ -1,6 +1,7 @@
 package com.codemate.plan;
 
 import com.codemate.llm.GLMClient;
+import com.codemate.llm.LlmClient;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
