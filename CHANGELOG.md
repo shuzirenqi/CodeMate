@@ -1,5 +1,18 @@
 # 版本记录
 
+## v0.7.0 — HITL 人工审批
+
+- 新增危险工具分级，`write_file`、`execute_command`、`create_project` 可在执行前请求人工审批。
+- 新增 `HitlToolRegistry`，通过继承并覆写工具执行入口，为 ReAct、Plan 和 Multi-Agent 提供统一透明拦截。
+- 终端审批支持批准、会话内同类操作全部放行、拒绝、跳过和修改参数。
+- 修改后的参数先进行 JSON 语法校验；输入流异常或连续无效输入时保守拒绝。
+- 新增 `/hitl`、`/hitl on`、`/hitl off` 和 `/memory clear` 命令。
+- `/clear` 改为只清空短期对话和会话放行记录，长期记忆仅通过显式命令维护。
+- 工具调用前主动收尾流式 Markdown 渲染，避免审批提示与模型输出交错。
+- 增加审批策略、审批结果、终端交互、注册表拦截和 Plan 工厂测试。
+
+验证结果：`mvn clean package` 通过，177 个测试全部通过；使用占位 Key 验证 `/hitl` 状态查询和开关命令，未触发真实模型、Embedding 或危险工具调用。
+
 ## v0.6.0 — Multi-Agent 协作
 
 - 新增 Planner、Worker、Reviewer 三类子 Agent 和角色化系统提示词。
