@@ -2,7 +2,7 @@
 
 CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言驱动代码阅读、文件修改、命令执行和项目创建。
 
-当前版本：**v0.2.0 — Plan-and-Execute 与 DAG 调度**。
+当前版本：**v0.3.0 — Memory 与上下文管理**。
 
 ## 当前能力
 
@@ -13,6 +13,10 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 - **失败处理**：任务失败且计划进度不足一半时尝试重新规划；依赖失败任务的节点不会被错误执行。
 - **基础工具**：读取文件、写入文件、列出目录、执行 Shell 命令、创建项目骨架。
 - **会话历史**：保留用户消息、模型回复与工具结果，支持手动清空。
+- **分层 Memory**：短期记忆保存会话与工具结果，长期记忆持久化可跨会话复用的事实。
+- **上下文压缩**：根据 Token 预算触发旧记忆的 Map-Reduce 摘要，并保留近期原始消息。
+- **相关记忆召回**：结合关键词匹配、时间衰减和类型权重，将 Top-K 结果按 Token 限额注入提示词。
+- **事实管理**：支持自动提取对话事实，也可以通过 `/save` 显式保存。
 
 ## 快速开始
 
@@ -22,7 +26,7 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 Copy-Item .env.example .env
 # 编辑 .env，填写 GLM_API_KEY
 mvn clean package
-java -jar target/codemate-0.2.0.jar
+java -jar target/codemate-0.3.0.jar
 ```
 
 API Key 的读取顺序为：当前目录 `.env`、用户主目录 `.env`、环境变量 `GLM_API_KEY`。`.env` 已加入 Git 忽略规则。
@@ -50,7 +54,14 @@ API Key 的读取顺序为：当前目录 `.env`、用户主目录 `.env`、环�
 | `Esc` | 折叠完整计划，或取消本次计划 |
 | `I` | 输入补充要求并重新规划 |
 
-其他命令：`/clear` 清空对话历史，`/exit` 或 `/quit` 退出。
+记忆与会话命令：
+
+| 命令 | 行为 |
+| --- | --- |
+| `/memory` / `/mem` | 查看短期、长期记忆及 Token 使用状态 |
+| `/save <事实>` | 将指定事实写入长期记忆 |
+| `/clear` | 提取当前会话中的关键事实，然后清空短期历史 |
+| `/exit` / `/quit` | 退出程序 |
 
 ## 执行流程
 
@@ -81,19 +92,24 @@ src/main/java/com/codemate/
 │   ├── Agent.java        ReAct 执行循环
 │   └── PlanExecuteAgent.java
 ├── plan/                 Planner、任务模型与 DAG 执行计划
+├── memory/               短期/长期记忆、检索、预算与摘要压缩
 ├── llm/GLMClient.java    模型请求和响应解析
 └── tool/ToolRegistry.java
 ```
 
-技术栈：Java 17、Maven、JLine、Jackson、OkHttp、JUnit 5、SLF4J。
+长期记忆默认保存在 `~/.codemate/memory/long_term_memory.json`，可以通过 JVM 属性 `-Dcodemate.memory.dir=<目录>` 修改位置。
+
+技术栈：Java 17、Maven、JLine、Jackson、OkHttp、Jieba、JUnit 5、SLF4J。
 
 ## 当前边界
 
 - ReAct 与 Plan 由用户选择，尚未实现按任务复杂度自动路由。
 - 重规划只在执行异常且当前进度不足 50% 时触发，不是每一步之后都进行全局判断。
 - 当前模型配置固定在代码中；模型请求和单任务内部工具调用仍为串行执行。
+- Memory 有独立的容量和压缩机制，Agent 实际请求消息历史尚未进行统一裁剪。
+- 自动事实提取依赖模型判断，可能保存临时信息；当前只能整体清理持久化文件，缺少单条编辑命令。
 - 文件写入和命令执行直接生效，尚未加入人工审批、沙箱和命令级超时。
-- 尚未实现 Memory、RAG、Multi-Agent 和 MCP。
+- 尚未实现 RAG、Multi-Agent 和 MCP。
 
 ## 版本记录
 

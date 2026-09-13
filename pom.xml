@@ -7,7 +7,7 @@
 
     <groupId>com.codemate</groupId>
     <artifactId>codemate</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <packaging>jar</packaging>
 
     <name>CodeMate</name>
@@ -53,6 +53,13 @@
             <groupId>org.jline</groupId>
             <artifactId>jline</artifactId>
             <version>3.26.3</version>
+        </dependency>
+
+        <!-- 中文分词 -->
+        <dependency>
+            <groupId>com.huaban</groupId>
+            <artifactId>jieba-analysis</artifactId>
+            <version>1.0.2</version>
         </dependency>
     </dependencies>
 
