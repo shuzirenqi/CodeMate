@@ -33,11 +33,12 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * CodeMate v0.9.0 - Multi-Model CLI
- * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用与多模型切换
+ * CodeMate v0.10.0 - Web-aware Tool CLI
+ * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用、多模型切换
+ * 联网能力：web_search（智谱/SerpAPI/SearXNG）、web_fetch（HTTP + readability）
  */
 public class Main {
-    private static final String VERSION = "0.9.0";
+    private static final String VERSION = "0.10.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "codemate.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "codemate.log.level";
@@ -809,7 +810,7 @@ public class Main {
         System.out.println("╔══════════════════════════════════════════════════════════╗");
         System.out.println("║                                                          ║");
         System.out.println("║                        CodeMate                          ║");
-        System.out.printf("║                Multi-Model CLI %-26s║%n", "v" + VERSION);
+        System.out.printf("║                Web-aware Tool CLI %-23s║%n", "v" + VERSION);
         System.out.println("║                                                          ║");
         System.out.println("╚══════════════════════════════════════════════════════════╝");
         System.out.println();

@@ -2,7 +2,7 @@
 
 CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言驱动代码阅读、文件修改、命令执行和项目创建。
 
-当前版本：**v0.9.0 — 多模型适配与运行时切换**。
+当前版本：**v0.10.0 — 联网能力与 Web 工具**。
 
 ## 当前能力
 
@@ -37,19 +37,25 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 - **双模型 Provider**：内置 GLM 和 DeepSeek 客户端，共用 OpenAI 兼容请求与 SSE 解析基类。
 - **运行时切换**：使用 `/model glm` 或 `/model deepseek` 切换当前模型，同时保留已有对话、Memory 和工具状态。
 - **上下文状态**：通过 `/context` 查看消息角色数量、对话轮次、字符量和 Memory Token 状态。
+- **联网搜索**：`web_search` 支持智谱 Web Search、SerpAPI 和自托管 SearXNG，并按现有配置自动选择 Provider。
+- **网页抓取**：`web_fetch` 使用 OkHttp 获取页面、Jsoup 解析 HTML，并通过简化 readability 提取 Markdown 正文。
+- **网络访问围栏**：仅允许 HTTP/HTTPS，拒绝 localhost、loopback、link-local 和 site-local 地址，并限制请求频率、响应大小和总超时。
+- **Agent 运行预算**：ReAct 和 SubAgent 通过 Token 预算、重复工具调用检测和硬轮数上限防止异常循环。
 
 ## 快速开始
 
-需要 Java 17+、Maven，以及至少一个 GLM 或 DeepSeek API Key。Shell 工具依赖 PATH 中可用的 `bash`，Windows 可以使用 Git Bash 环境。
+需要 Java 17+、Maven，以及至少一个 GLM 或 DeepSeek API Key。Shell 工具依赖 `bash`；Windows 会优先查找常见位置的 Git Bash，也可以通过 `-Dcodemate.shell.bash=<路径>` 显式指定。
 
 ```powershell
 Copy-Item .env.example .env
 # 编辑 .env，填写 GLM_API_KEY
 mvn clean package
-java -jar target/codemate-0.9.0.jar
+java -jar target/codemate-0.10.0.jar
 ```
 
 模型配置从 `~/.codemate/config.json`、环境变量和 `.env` 读取。至少配置 `GLM_API_KEY` 或 `DEEPSEEK_API_KEY`；模型名可分别通过 `GLM_MODEL` 和 `DEEPSEEK_MODEL` 指定。`.env` 已加入 Git 忽略规则。
+
+Web 搜索默认优先复用 `GLM_API_KEY` 选择智谱，也可以通过 `SEARCH_PROVIDER` 显式选择 `zhipu`、`serpapi` 或 `searxng`。对应配置示例见 `.env.example`。
 
 ## 使用方式
 
@@ -122,6 +128,8 @@ ReAct、Plan 的单任务执行器和 Multi-Agent Worker 都通过 `ToolRegistry
 
 切换模型时，主 ReAct Agent 会替换 `LlmClient`，MemoryManager 同步使用新客户端；之后新建的 Plan 和 Multi-Agent 执行器也会使用当前模型。默认 Provider 会写入 `~/.codemate/config.json`，API Key 仍建议放在环境变量或 `.env` 中。
 
+Agent 面对最新版本、官方动态等时效性问题时可先调用 `web_search`，拿到 URL 后再通过 `web_fetch` 获取正文。已有 URL 时可以直接抓取；遇到 SPA 或防爬页面返回空正文后不会自动无限重试。
+
 ## 代码结构
 
 ```text
@@ -138,6 +146,7 @@ src/main/java/com/codemate/
 ├── memory/               短期/长期记忆、检索、预算与摘要压缩
 ├── rag/                  分块、AST 分析、Embedding、SQLite 与检索
 ├── hitl/                 风险分级、审批请求、终端交互与工具拦截
+├── web/                  搜索 Provider、网络策略、网页抓取和正文提取
 ├── util/                 ANSI 样式、Jieba 工厂与终端 Markdown 渲染
 ├── llm/                  统一接口、兼容基类、GLM 与 DeepSeek 客户端
 └── tool/ToolRegistry.java
@@ -158,6 +167,9 @@ src/main/java/com/codemate/
 - 当前只内置 GLM 和 DeepSeek；Provider 的 `baseUrl` 配置字段尚未用于覆盖客户端固定地址。
 - 切换模型会保留对话上下文，不会自动重算或迁移不同模型之间的上下文限制。
 - 工具并行上限和批次超时仍是代码内默认值，尚未提供 CLI 配置。
+- `web_fetch` 只处理直接 HTTP 可获得的静态或服务端渲染 HTML，不执行 JavaScript，也不能绕过登录和反爬机制。
+- 网络围栏属于基础 SSRF 防护，尚未解决 DNS rebinding 等完整生产级威胁。
+- AgentBudget 默认是 300,000 Token、连续 3 轮相同工具调用和最多 50 轮，可通过 `codemate.react.*` JVM 属性覆盖。
 - 流式输出依赖上游返回 OpenAI 兼容的 SSE 数据和 `reasoning_content` 字段；接口不返回推理内容时只展示回复。
 - Planner、Worker 和 Reviewer 当前共享同一个模型客户端，通过系统提示词、工具权限和独立历史区分角色。
 - Reviewer 属于模型判断，不等同于编译和测试等确定性验收；达到重试上限后会保留当前结果并继续汇总。

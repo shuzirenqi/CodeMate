@@ -40,7 +40,7 @@ class ToolRegistryTest {
 
         String result = registry.executeTool("execute_command", "{\"command\":\"sleep 2\"}");
 
-        assertTrue(result.contains("命令执行超时"));
+        assertTrue(result.contains("命令执行超时"), result);
     }
 
     @Test

@@ -1,5 +1,19 @@
 # 版本记录
 
+## v0.10.0 — 联网能力与 Web 工具
+
+- 新增 `web_search` 工具和 `SearchProvider` 接口，内置智谱、SerpAPI、SearXNG 三种实现。
+- Provider 可通过 `SEARCH_PROVIDER` 显式选择，也可根据 GLM Key、SerpAPI Key 或 SearXNG URL 自动判断。
+- 新增 `web_fetch`，使用 OkHttp、Jsoup 和简化 readability 抽取 Markdown 正文。
+- 新增基础网络访问策略：HTTP/HTTPS 白名单、内网地址拦截、每分钟 30 次限流、30 秒超时和 5MB 响应上限。
+- ReAct、Plan 和 Worker 提示词加入联网工具选择规则，已知 URL 直接抓取，SPA 或防爬边界不反复重试。
+- 新增 `AgentBudget`，使用 Token 预算、重复工具调用检测和硬轮数上限阻止异常循环。
+- LLM SSE 默认读取超时放宽并增加整体调用超时配置，适配长时间推理响应。
+- 增加搜索结果、Provider 工厂、智谱请求、网络策略、HTML 提取和网页抓取测试。
+- 保留多模型和并行工具；Windows 明确优先使用 Git Bash，避免误用不可用的 WSL 启动器，并继续清理超时命令的完整进程树。
+
+验证结果：`mvn clean package` 通过，229 个测试全部通过；`ToolRegistryTest` 修复 Bash 选择后连续运行 3 次通过；使用隔离用户目录和占位 GLM Key完成 v0.10.0 启动检查，未调用真实模型、搜索 Provider、外部网页或 Embedding 服务。
+
 ## v0.9.0 — 多模型适配与运行时切换
 
 - 抽出 `LlmClient` 接口，统一消息、工具调用、流式监听和响应结构。
