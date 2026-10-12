@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.codemate.mcp.protocol.McpToolDescriptor;
 import com.codemate.rag.CodeRetriever;
 import com.codemate.rag.SearchResultFormatter;
 import com.codemate.rag.VectorStore;
@@ -27,6 +28,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Function;
 
 /**
  * 工具注册表 - 管理所有可用工具
@@ -38,11 +40,12 @@ public class ToolRegistry {
     private static final int MAX_PARALLEL_TOOLS = 4;
     private static final int MAX_COMMAND_OUTPUT_CHARS = 8_000;
     // write_file 单次写入字节数上限。LLM 想塞超大内容时通常是误生成（重复粘贴 / hallucinate 大段日志），
-    // 5MB 对教学项目完全够用，超过即拒，避免磁盘灌满与误覆盖。
+    // 5MB 对常规代码生成 / 文档撰写完全够用，超过即拒，避免磁盘灌满与误覆盖。
     private static final int MAX_WRITE_FILE_BYTES = 5 * 1024 * 1024;
-    // 需要审计的工具（与 ApprovalPolicy 的 DANGEROUS_TOOLS 保持一致）。
+    // 需要审计的内置工具（与 ApprovalPolicy 的 DANGEROUS_TOOLS 保持一致）；MCP 工具按前缀动态纳入审计。
     private static final Set<String> AUDIT_TOOLS = Set.of("write_file", "execute_command", "create_project");
-    private final Map<String, Tool> tools = new HashMap<>();
+    private final Map<String, Tool> tools = new ConcurrentHashMap<>();
+    private final Map<String, McpRegisteredTool> mcpTools = new ConcurrentHashMap<>();
     private final long commandTimeoutSeconds;
     private final long toolBatchTimeoutSeconds;
     private static final int DEFAULT_FETCH_MAX_CHARS = 8_000;
@@ -452,6 +455,35 @@ public class ToolRegistry {
     }
 
     /**
+     * 注册一个 MCP 工具到 ToolRegistry。
+     *
+     * @param descriptor 工具描述（含 namespacedName 如 mcp__filesystem__read_file）
+     * @param invoker    工具执行器：输入 JSON 参数字符串，输出给 LLM 看的字符串结果。
+     *                   typically lambda 在内部调用 McpClient.callTool 并处理异常 → 字符串。
+     */
+    public void registerMcpTool(McpToolDescriptor descriptor, Function<String, String> invoker) {
+        Objects.requireNonNull(descriptor, "descriptor");
+        Objects.requireNonNull(invoker, "invoker");
+        String toolName = descriptor.namespacedName();
+        McpRegisteredTool registered = new McpRegisteredTool(descriptor, invoker);
+        mcpTools.put(toolName, registered);
+        tools.put(toolName, new Tool(
+                toolName,
+                mcpDescription(descriptor),
+                descriptor.inputSchema(),
+                args -> "MCP 工具不应通过 Map<String,String> 入口执行"
+        ));
+    }
+
+    public void unregisterMcpTool(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return;
+        }
+        mcpTools.remove(toolName);
+        tools.remove(toolName);
+    }
+
+    /**
      * 执行工具调用
      *
      * 危险工具（write_file / execute_command / create_project）会写一行审计：
@@ -465,10 +497,19 @@ public class ToolRegistry {
             return "未知工具: " + name;
         }
 
-        boolean shouldAudit = AUDIT_TOOLS.contains(name);
+        boolean shouldAudit = shouldAudit(name);
         long start = System.nanoTime();
 
         try {
+            McpRegisteredTool mcpTool = mcpTools.get(name);
+            if (mcpTool != null) {
+                String result = mcpTool.invoker().apply(argumentsJson);
+                if (shouldAudit) {
+                    auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
+                }
+                return result;
+            }
+
             JsonNode args = mapper.readTree(argumentsJson);
             Map<String, String> argMap = new HashMap<>();
             args.fields().forEachRemaining(entry ->
@@ -574,6 +615,17 @@ public class ToolRegistry {
         return tools.containsKey(name);
     }
 
+    private static boolean shouldAudit(String name) {
+        return AUDIT_TOOLS.contains(name) || (name != null && name.startsWith("mcp__"));
+    }
+
+    private static String mcpDescription(McpToolDescriptor descriptor) {
+        String base = descriptor.description() == null || descriptor.description().isBlank()
+                ? "MCP server 提供的外部工具"
+                : descriptor.description();
+        return base + " (MCP server: " + descriptor.serverName() + ", tool: " + descriptor.name() + ")";
+    }
+
     private String executeCommand(String command) {
         String normalized = command == null ? "" : command.trim();
         if (normalized.isEmpty()) {
@@ -586,8 +638,6 @@ public class ToolRegistry {
             throw new PolicyException(denyReason);
         }
 
-        // Git Bash 的 pwd 会返回 MSYS 路径。直接使用 Java 路径可在 Windows 上稳定
-        // 返回项目目录，并避免短生命周期 shell 持有测试临时目录句柄。
         if ("pwd".equals(normalized)) {
             String workingDirectory = Path.of(projectPath).toAbsolutePath().normalize().toString();
             return "命令执行完成 (exit code: 0)\n工作目录: " + workingDirectory + "\n" + workingDirectory + "\n";
@@ -619,8 +669,7 @@ public class ToolRegistry {
             String output = getCommandOutput(outputFuture);
             int exitCode = process.exitValue();
             String workingDirectory = Path.of(projectPath).toAbsolutePath().normalize().toString();
-            return String.format("命令执行完成 (exit code: %d)\n工作目录: %s\n%s",
-                    exitCode, workingDirectory, output);
+            return String.format("命令执行完成 (exit code: %d)\n工作目录: %s\n%s", exitCode, workingDirectory, output);
         } catch (Exception e) {
             if (process != null) {
                 terminateProcessTree(process);
@@ -638,35 +687,16 @@ public class ToolRegistry {
     }
 
     private void closeProcessStreams(Process process) {
-        if (process == null) {
-            return;
-        }
-        try {
-            process.getOutputStream().close();
-        } catch (Exception ignored) {
-        }
-        try {
-            process.getInputStream().close();
-        } catch (Exception ignored) {
-        }
-        try {
-            process.getErrorStream().close();
-        } catch (Exception ignored) {
-        }
+        if (process == null) return;
+        try { process.getOutputStream().close(); } catch (Exception ignored) { }
+        try { process.getInputStream().close(); } catch (Exception ignored) { }
+        try { process.getErrorStream().close(); } catch (Exception ignored) { }
     }
 
-    /**
-     * Windows 自带的 System32/bash.exe 是 WSL 启动器，WSL 未启用时会直接失败。
-     * CodeMate 的 Shell 语义按 Git Bash 设计，其他安装位置可通过系统属性覆盖。
-     */
     private String resolveBashExecutable() {
         String configured = System.getProperty("codemate.shell.bash");
-        if (configured != null && !configured.isBlank()) {
-            return configured.trim();
-        }
-        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
-            return "bash";
-        }
+        if (configured != null && !configured.isBlank()) return configured.trim();
+        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) return "bash";
         List<Path> candidates = new ArrayList<>();
         addBashCandidate(candidates, System.getenv("ProgramFiles"), "Git", "bin", "bash.exe");
         addBashCandidate(candidates, System.getenv("ProgramFiles(x86)"), "Git", "bin", "bash.exe");
@@ -675,32 +705,14 @@ public class ToolRegistry {
     }
 
     private void addBashCandidate(List<Path> candidates, String root, String... segments) {
-        if (root != null && !root.isBlank()) {
-            candidates.add(Path.of(root, segments));
-        }
+        if (root != null && !root.isBlank()) candidates.add(Path.of(root, segments));
     }
 
-    /**
-     * 终止 Shell 以及它启动的子进程，防止子进程继续占用项目目录或输出流。
-     */
     private void terminateProcessTree(Process process) {
         List<ProcessHandle> handles = new ArrayList<>(process.toHandle().descendants().toList());
         Collections.reverse(handles);
         handles.forEach(ProcessHandle::destroyForcibly);
         process.destroyForcibly();
-
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        while (System.nanoTime() < deadline) {
-            if (!process.isAlive() && handles.stream().noneMatch(ProcessHandle::isAlive)) {
-                return;
-            }
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
     }
 
     private String readProcessOutput(Process process) throws Exception {
@@ -738,6 +750,8 @@ public class ToolRegistry {
     private record Param(String name, String type, String description, boolean required) {}
 
     public record Tool(String name, String description, JsonNode parameters, ToolExecutor executor) {}
+
+    private record McpRegisteredTool(McpToolDescriptor descriptor, Function<String, String> invoker) {}
 
     public record ToolInvocation(String id, String name, String argumentsJson) {}
 

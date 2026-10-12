@@ -1,5 +1,16 @@
 # 版本记录
 
+## v0.12.0 — MCP 协议核心
+
+- 支持 stdio 子进程和 Streamable HTTP 两种 MCP Transport，并实现 JSON-RPC 2.0 请求、响应配对和初始化流程。
+- 新增 MCP 配置加载：合并用户级 `~/.codemate/mcp.json` 与项目级 `.codemate/mcp.json`，项目配置覆盖同名 Server。
+- 将 `tools/list` 返回的工具注册为 `mcp__{server}__{tool}`，自动加入模型可调用工具定义；工具参数 Schema 会过滤不兼容字段。
+- 新增 `/mcp`、`/mcp restart`、`/mcp logs`、`/mcp disable`、`/mcp enable` 服务管理命令。
+- 所有 MCP 工具默认受 HITL 审批并进入 JSONL 审计，审计中会对常见密钥字段脱敏。
+- 保留 Windows Git Bash 选择、命令进程树终止和原生工作目录输出兼容处理。
+
+验证结果：`mvn clean package` 通过，308 个测试全部通过；MCP 单元测试使用内存 Transport 与 MockWebServer，不启动真实 MCP Server 或访问外部服务。
+
 ## v0.11.0 — 安全策略围栏与操作审计
 
 - 为 `read_file`、`write_file`、`list_dir` 和 `create_project` 新增项目根路径围栏，拒绝绝对路径外逃、`..` 穿越和符号链接逃逸。

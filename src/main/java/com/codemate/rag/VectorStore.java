@@ -12,7 +12,7 @@ import java.util.List;
  * SQLite 向量存储 + 代码关系图谱持久化
  * <p>
  * 向量以 JSON 数组形式存储在 SQLite 中，检索时在内存计算余弦相似度。
- * 对于代码库规模（通常几百到几千个块），此方案简单且教学价值高。
+ * 对于代码库规模（通常几百到几千个块），此方案足够；规模再大可换 FAISS / pgvector 等。
  */
 public class VectorStore implements AutoCloseable {
     private static final ObjectMapper mapper = new ObjectMapper();
@@ -20,8 +20,7 @@ public class VectorStore implements AutoCloseable {
     private final String projectPath;
 
     public VectorStore(String projectPath) throws SQLException {
-        // 统一项目路径表示，避免 Windows 下同一路径因相对/绝对写法不同而无法命中索引。
-        this.projectPath = Path.of(projectPath).toAbsolutePath().normalize().toString();
+        this.projectPath = projectPath;
         String dbDir = System.getProperty("codemate.rag.dir",
                 System.getProperty("user.home") + "/.codemate/rag");
         java.io.File dir = new java.io.File(dbDir);
