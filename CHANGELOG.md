@@ -1,5 +1,16 @@
 # 版本记录
 
+## v0.11.0 — 安全策略围栏与操作审计
+
+- 为 `read_file`、`write_file`、`list_dir` 和 `create_project` 新增项目根路径围栏，拒绝绝对路径外逃、`..` 穿越和符号链接逃逸。
+- 为 `execute_command` 新增危险命令快速拒绝，覆盖提权、全盘删除、磁盘格式化、裸设备写入、fork bomb 和远端脚本管道执行等典型风险。
+- `write_file` 新增单文件 5MB 上限；命令仍保留 60 秒超时和 8KB 输出截断。
+- 新增按天 JSONL 操作审计，记录危险工具的允许、HITL 拒绝、策略拒绝和异常结果。
+- 新增 `/policy` 查看安全策略状态，`/audit [N]` 查看今日最近的危险工具审计记录。
+- HITL 批准后仍需通过安全策略校验，用户不能批准绕过路径或命令策略。
+
+验证结果：`mvn clean package` 通过，261 个测试全部通过；覆盖路径越界、符号链接逃逸、危险命令、审计落盘、HITL 审批与策略拒绝分支。随后使用隔离用户目录进行 CLI 启动检查，不调用真实模型、搜索 Provider、外部网页或 Embedding 服务。
+
 ## v0.10.0 — 联网能力与 Web 工具
 
 - 新增 `web_search` 工具和 `SearchProvider` 接口，内置智谱、SerpAPI、SearXNG 三种实现。

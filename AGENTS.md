@@ -2,8 +2,8 @@
 
 ## 当前阶段
 
-- v0.10.0：ReAct、Plan-and-Execute、Multi-Agent、Memory、RAG、HITL、并行工具、GLM/DeepSeek 切换、AgentBudget、联网搜索与网页抓取；Java 17、Maven。
-- 入口：`com.codemate.cli.Main`；产物：`target/codemate-0.10.0.jar`。
+- v0.11.0：ReAct、Plan-and-Execute、Multi-Agent、Memory、RAG、HITL、并行工具、GLM/DeepSeek 切换、联网搜索与网页抓取，以及路径围栏、命令快速拒绝和 JSONL 操作审计；Java 17、Maven。
+- 入口：`com.codemate.cli.Main`；产物：`target/codemate-0.11.0.jar`。
 - 版本能力与验证记录见 `CHANGELOG.md`，来源信息见 `NOTICE.md`。
 - 参照仓库只用于读取阶段快照，不修改其工作区。
 
@@ -19,5 +19,5 @@
 ## 验证
 
 - 每阶段至少执行 `mvn clean package`，有测试时检查测试结果。
-- 当前包含 CLI、多模型、Plan、Multi-Agent、Memory、RAG、HITL、并行工具、AgentBudget、Web Provider、网络策略与 HTML 提取测试；不得将单元测试通过描述成真实模型、搜索 Provider、外部网页或 Embedding 联调通过。
-- HITL 默认关闭，属于交互审批层而非沙箱；验证避免真实危险操作。
+- 当前包含 CLI、多模型、Plan、Multi-Agent、Memory、RAG、HITL、并行工具、AgentBudget、Web Provider、网络策略、HTML 提取与安全策略测试；不得将单元测试通过描述成真实模型、搜索 Provider、外部网页或 Embedding 联调通过。
+- HITL 默认关闭，路径围栏和命令规则也不是沙箱；验证避免真实危险操作。

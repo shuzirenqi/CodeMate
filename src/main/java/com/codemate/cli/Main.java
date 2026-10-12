@@ -10,6 +10,8 @@ import com.codemate.llm.LlmClient;
 import com.codemate.llm.LlmClientFactory;
 import com.codemate.plan.ExecutionPlan;
 import com.codemate.rag.CodeIndex;
+import com.codemate.hitl.ApprovalPolicy;
+import com.codemate.policy.AuditLog;
 import com.codemate.rag.CodeRetriever;
 import com.codemate.rag.CodeRelation;
 import com.codemate.rag.SearchResultFormatter;
@@ -33,12 +35,12 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * CodeMate v0.10.0 - Web-aware Tool CLI
- * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具调用、多模型切换
- * 联网能力：web_search（智谱/SerpAPI/SearXNG）、web_fetch（HTTP + readability）
+ * CodeMate v0.11.0 - Security Policy CLI
+ * 支持 ReAct、Plan-and-Execute、Memory、RAG、Multi-Agent、HITL、并行工具、多模型与 Web 工具
+ * 安全策略：路径围栏、危险命令快速拒绝与 JSONL 操作审计
  */
 public class Main {
-    private static final String VERSION = "0.10.0";
+    private static final String VERSION = "0.11.0";
     private static final String ENV_FILE = ".env";
     private static final String LOG_DIR_PROPERTY = "codemate.log.dir";
     private static final String LOG_LEVEL_PROPERTY = "codemate.log.level";
@@ -160,7 +162,7 @@ public class Main {
                 switch (command.type()) {
                     case UNKNOWN_COMMAND -> {
                         System.out.println("❌ 未知命令: " + command.payload());
-                        System.out.println("可用命令：/model /plan /team /hitl /clear /context /memory /memory clear /save /index /search /graph /exit\n");
+                        System.out.println("可用命令：/model /plan /team /hitl /policy /audit /clear /context /memory /memory clear /save /index /search /graph /exit\n");
                         continue;
                     }
                     case EXIT -> {
@@ -256,6 +258,14 @@ public class Main {
                             System.out.println("   /hitl on  - 启用人工审批");
                             System.out.println("   /hitl off - 关闭人工审批\n");
                         }
+                        continue;
+                    }
+                    case POLICY_STATUS -> {
+                        printPolicyStatus(reactAgent);
+                        continue;
+                    }
+                    case AUDIT_TAIL -> {
+                        printAuditTail(reactAgent, command.payload());
                         continue;
                     }
                     case INDEX_CODE -> {
@@ -612,6 +622,8 @@ public class Main {
                 "计划生成后可直接执行、补充要求重规划，或取消",
                 "输入 '/hitl on' 启用危险操作人工审批（HITL）",
                 "输入 '/hitl off' 关闭 HITL 审批",
+                "输入 '/policy' 查看安全策略状态（路径围栏 / 命令黑名单 / 资源上限）",
+                "输入 '/audit [N]' 查看最近 N 条危险工具审计记录（默认 10）",
                 "输入 '/index [路径]' 为代码库建立向量索引",
                 "输入 '/search <查询>' 语义检索代码",
                 "输入 '/graph <类名>' 查看代码关系图谱",
@@ -623,6 +635,50 @@ public class Main {
                 "输入 '/save 事实内容' 手动保存关键事实",
                 "输入 '/exit' 或 '/quit' 退出"
         );
+    }
+
+    private static void printPolicyStatus(Agent reactAgent) {
+        System.out.println("🛡️ 安全策略状态：");
+        System.out.println("   项目根: " + reactAgent.getToolRegistry().getProjectPath());
+        System.out.println("   危险工具: " + String.join(", ", ApprovalPolicy.getDangerousTools()));
+        System.out.println("   路径围栏: 强制限定在项目根之内（read_file / write_file / list_dir / create_project）");
+        System.out.println("   命令黑名单: sudo / rm -rf 全盘 / mkfs / dd of=/dev / fork bomb / curl|sh / find / / chmod 777 / / shutdown");
+        System.out.println("   写入文件上限: 5MB");
+        System.out.println("   命令执行上限: 60 秒，输出 8KB（截断）");
+        System.out.println("   审计目录: " + reactAgent.getToolRegistry().getAuditLog().getAuditDir());
+        System.out.println();
+    }
+
+    private static void printAuditTail(Agent reactAgent, String payload) {
+        int requested = parseAuditCount(payload, 10);
+        List<AuditLog.AuditEntry> entries = reactAgent.getToolRegistry().getAuditLog().readRecent(requested);
+        if (entries.isEmpty()) {
+            System.out.println("📭 今日尚无审计记录\n");
+            return;
+        }
+        System.out.println("📋 最近 " + entries.size() + " 条危险工具审计：");
+        for (AuditLog.AuditEntry entry : entries) {
+            System.out.printf("   [%s] %s %s (%dms, approver=%s)%n",
+                    entry.outcome().toUpperCase(),
+                    entry.timestamp(),
+                    entry.tool(),
+                    entry.durationMs(),
+                    entry.approver());
+            if (entry.reason() != null && !entry.reason().isBlank()) {
+                System.out.println("        原因: " + entry.reason());
+            }
+        }
+        System.out.println();
+    }
+
+    private static int parseAuditCount(String payload, int defaultN) {
+        if (payload == null || payload.isBlank()) return defaultN;
+        try {
+            int n = Integer.parseInt(payload.trim());
+            return Math.max(1, Math.min(n, 100));
+        } catch (NumberFormatException e) {
+            return defaultN;
+        }
     }
 
     private static void printStartupHints() {
@@ -810,7 +866,7 @@ public class Main {
         System.out.println("╔══════════════════════════════════════════════════════════╗");
         System.out.println("║                                                          ║");
         System.out.println("║                        CodeMate                          ║");
-        System.out.printf("║                Web-aware Tool CLI %-23s║%n", "v" + VERSION);
+        System.out.printf("║                Security Policy CLI %-22s║%n", "v" + VERSION);
         System.out.println("║                                                          ║");
         System.out.println("╚══════════════════════════════════════════════════════════╝");
         System.out.println();

@@ -2,7 +2,7 @@
 
 CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言驱动代码阅读、文件修改、命令执行和项目创建。
 
-当前版本：**v0.10.0 — 联网能力与 Web 工具**。
+当前版本：**v0.11.0 — 安全策略围栏与操作审计**。
 
 ## 当前能力
 
@@ -41,6 +41,9 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 - **网页抓取**：`web_fetch` 使用 OkHttp 获取页面、Jsoup 解析 HTML，并通过简化 readability 提取 Markdown 正文。
 - **网络访问围栏**：仅允许 HTTP/HTTPS，拒绝 localhost、loopback、link-local 和 site-local 地址，并限制请求频率、响应大小和总超时。
 - **Agent 运行预算**：ReAct 和 SubAgent 通过 Token 预算、重复工具调用检测和硬轮数上限防止异常循环。
+- **路径围栏**：文件读取、写入、目录浏览和项目创建只能访问项目根目录，拦截绝对路径、`..` 穿越和符号链接逃逸。
+- **命令快速拒绝**：在 Shell 调用前拦截 `sudo`、全盘删除、格式化磁盘、fork bomb 和远端脚本管道执行等明显危险命令。
+- **操作审计**：危险工具按天写入 JSONL 审计记录，可查询批准、拒绝和执行错误及其原因。
 
 ## 快速开始
 
@@ -50,7 +53,7 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 Copy-Item .env.example .env
 # 编辑 .env，填写 GLM_API_KEY
 mvn clean package
-java -jar target/codemate-0.10.0.jar
+java -jar target/codemate-0.11.0.jar
 ```
 
 模型配置从 `~/.codemate/config.json`、环境变量和 `.env` 读取。至少配置 `GLM_API_KEY` 或 `DEEPSEEK_API_KEY`；模型名可分别通过 `GLM_MODEL` 和 `DEEPSEEK_MODEL` 指定。`.env` 已加入 Git 忽略规则。
@@ -94,6 +97,8 @@ Web 搜索默认优先复用 `GLM_API_KEY` 选择智谱，也可以通过 `SEARC
 | `/team <任务>` | 直接使用 Multi-Agent 执行任务 |
 | `/hitl` | 查看 HITL 审批状态 |
 | `/hitl on` / `/hitl off` | 启用或关闭危险操作审批 |
+| `/policy` | 查看项目路径围栏、命令策略、资源上限与审计目录 |
+| `/audit [N]` | 查看今日最近 N 条危险工具审计，默认 10、最多 100 |
 | `/clear` | 清空短期对话历史和本次会话的“全部放行”记录，保留长期记忆 |
 | `/index [路径]` | 为指定路径建立或重建代码索引，默认当前目录 |
 | `/search <查询>` | 使用自然语言混合检索代码 |
@@ -124,6 +129,8 @@ Multi-Agent 模式由编排器统一维护步骤状态：Planner 输出 JSON 计
 
 HITL 默认关闭。启用后，统一工具注册表会在危险工具执行前透明拦截；ReAct、Plan 和 Multi-Agent 共用同一个审批注册表，因此三条执行路径遵循一致规则。审批输入支持 `y/Enter`、`a`、`n`、`s`、`m`，其中修改后的参数会先经过 JSON 语法校验。
 
+安全策略独立于 HITL：用户即使批准请求，路径越界、写入内容超过 5MB 或命中危险命令规则时仍会被拒绝。`write_file`、`execute_command` 和 `create_project` 的结果会写入 `~/.codemate/audit/audit-YYYY-MM-DD.jsonl`；可用 `-Dcodemate.audit.dir=<目录>` 或 `CODEMATE_AUDIT_DIR` 修改目录。
+
 ReAct、Plan 的单任务执行器和 Multi-Agent Worker 都通过 `ToolRegistry.executeTools()` 执行一轮工具请求。模型必须把有依赖关系的操作拆到不同轮次；同一轮只适合读取多个文件、列出多个目录等互不依赖的操作。HITL 审批仍会串行读取终端输入，避免多个并发工具同时争抢 stdin/stdout。
 
 切换模型时，主 ReAct Agent 会替换 `LlmClient`，MemoryManager 同步使用新客户端；之后新建的 Plan 和 Multi-Agent 执行器也会使用当前模型。默认 Provider 会写入 `~/.codemate/config.json`，API Key 仍建议放在环境变量或 `.env` 中。
@@ -146,6 +153,7 @@ src/main/java/com/codemate/
 ├── memory/               短期/长期记忆、检索、预算与摘要压缩
 ├── rag/                  分块、AST 分析、Embedding、SQLite 与检索
 ├── hitl/                 风险分级、审批请求、终端交互与工具拦截
+├── policy/               路径围栏、命令规则、策略异常与 JSONL 审计
 ├── web/                  搜索 Provider、网络策略、网页抓取和正文提取
 ├── util/                 ANSI 样式、Jieba 工厂与终端 Markdown 渲染
 ├── llm/                  统一接口、兼容基类、GLM 与 DeepSeek 客户端
@@ -177,7 +185,8 @@ src/main/java/com/codemate/
 - 长期记忆目前支持显式保存和整体清空，尚不支持单条编辑或删除。
 - 建索引需要可用的 Embedding 服务；索引过程逐文件执行，大型仓库尚未做增量更新和批量向量化。
 - Java 关系分析基于语法结构和名称匹配，不进行完整的类型与符号求解。
-- HITL 默认关闭，开启后只负责交互确认；当前没有进程隔离或完整命令策略，不能把审批等同于沙箱。
+- HITL 默认关闭；路径与资源限制属于基础安全策略，但没有提供进程隔离，不能把它们等同于沙箱。
+- 命令黑名单只用于快速拦截典型危险形式，不能覆盖编码、间接执行和所有 Shell 语义；危险操作仍应启用 HITL 并由用户审阅。
 - 尚未实现 MCP。
 
 ## 版本记录
