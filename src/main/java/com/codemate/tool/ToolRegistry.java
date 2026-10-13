@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.codemate.browser.BrowserAuditMetadata;
+import com.codemate.browser.BrowserCheckResult;
+import com.codemate.browser.BrowserGuard;
 import com.codemate.context.ContextProfile;
 import com.codemate.mcp.protocol.McpToolDescriptor;
 import com.codemate.rag.CodeRetriever;
@@ -59,6 +62,7 @@ public class ToolRegistry {
     private HtmlExtractor htmlExtractor;
     private NetworkPolicy networkPolicy;
     private ContextProfile contextProfile = ContextProfile.from(null);
+    private BrowserGuard browserGuard;
 
     public ToolRegistry() {
         this(DEFAULT_COMMAND_TIMEOUT_SECONDS, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS);
@@ -102,6 +106,14 @@ public class ToolRegistry {
 
     public ContextProfile getContextProfile() {
         return contextProfile;
+    }
+
+    public void setBrowserGuard(BrowserGuard browserGuard) {
+        this.browserGuard = browserGuard;
+    }
+
+    protected BrowserGuard getBrowserGuard() {
+        return browserGuard;
     }
 
     /**
@@ -534,13 +546,22 @@ public class ToolRegistry {
 
         boolean shouldAudit = shouldAudit(name);
         long start = System.nanoTime();
+        BrowserAuditMetadata auditMetadata = null;
 
         try {
             McpRegisteredTool mcpTool = mcpTools.get(name);
             if (mcpTool != null) {
+                BrowserCheckResult browserCheck = checkBrowserTool(name, argumentsJson, false);
+                auditMetadata = browserCheck.metadata();
+                if (browserCheck.blocked()) {
+                    throw new PolicyException(browserCheck.reason());
+                }
                 String result = mcpTool.invoker().apply(argumentsJson);
+                if (browserGuard != null) {
+                    browserGuard.applyAfterExecution(name, argumentsJson, result);
+                }
                 if (shouldAudit) {
-                    auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
+                    auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start), auditMetadata));
                 }
                 return result;
             }
@@ -551,22 +572,29 @@ public class ToolRegistry {
                     argMap.put(entry.getKey(), entry.getValue().asText()));
             String result = tool.executor().execute(argMap);
             if (shouldAudit) {
-                auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start)));
+                auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start), auditMetadata));
             }
             return result;
         } catch (PolicyException e) {
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.denyByPolicy(
-                        name, argumentsJson, e.getMessage(), elapsedMillis(start)));
+                        name, argumentsJson, e.getMessage(), elapsedMillis(start), auditMetadata));
             }
             return "🛡️ 策略拒绝: " + e.getMessage();
         } catch (Exception e) {
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.error(
-                        name, argumentsJson, e.getMessage(), elapsedMillis(start)));
+                        name, argumentsJson, e.getMessage(), elapsedMillis(start), auditMetadata));
             }
             return "工具执行失败: " + e.getMessage();
         }
+    }
+
+    protected BrowserCheckResult checkBrowserTool(String name, String argumentsJson, boolean previewOnly) {
+        if (browserGuard == null || !BrowserGuard.isChromeTool(name)) {
+            return BrowserCheckResult.allow(null);
+        }
+        return browserGuard.check(name, argumentsJson, !previewOnly);
     }
 
     public AuditLog getAuditLog() {
@@ -681,6 +709,11 @@ public class ToolRegistry {
             throw new PolicyException(denyReason);
         }
 
+        if ("pwd".equals(normalized)) {
+            String workingDirectory = Path.of(projectPath).toAbsolutePath().normalize().toString();
+            return "命令执行完成 (exit code: 0)\n工作目录: " + workingDirectory + "\n" + workingDirectory + "\n";
+        }
+
         ExecutorService outputReaderExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread thread = new Thread(r, "codemate-command-output");
             thread.setDaemon(true);
@@ -699,37 +732,29 @@ public class ToolRegistry {
 
             boolean finished = process.waitFor(commandTimeoutSeconds, TimeUnit.SECONDS);
             if (!finished) {
-                terminateProcessTree(process);
+                process.destroyForcibly();
+                process.waitFor(2, TimeUnit.SECONDS);
                 outputFuture.cancel(true);
                 return "命令执行超时（" + commandTimeoutSeconds + "秒），已强制终止";
             }
 
             String output = getCommandOutput(outputFuture);
             int exitCode = process.exitValue();
-            String workingDirectory = Path.of(projectPath).toAbsolutePath().normalize().toString();
-            return String.format("命令执行完成 (exit code: %d)\n工作目录: %s\n%s", exitCode, workingDirectory, output);
+            return String.format("命令执行完成 (exit code: %d)\n%s", exitCode, output);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             if (process != null) {
-                terminateProcessTree(process);
+                process.destroyForcibly();
             }
             return "用户取消了此次工具调用";
         } catch (Exception e) {
             if (process != null) {
-                terminateProcessTree(process);
+                process.destroyForcibly();
             }
             return "执行命令失败: " + e.getMessage();
         } finally {
-            closeProcessStreams(process);
             outputReaderExecutor.shutdownNow();
         }
-    }
-
-    private void closeProcessStreams(Process process) {
-        if (process == null) return;
-        try { process.getOutputStream().close(); } catch (Exception ignored) { }
-        try { process.getInputStream().close(); } catch (Exception ignored) { }
-        try { process.getErrorStream().close(); } catch (Exception ignored) { }
     }
 
     private String resolveBashExecutable() {
@@ -745,13 +770,6 @@ public class ToolRegistry {
 
     private void addBashCandidate(List<Path> candidates, String root, String... segments) {
         if (root != null && !root.isBlank()) candidates.add(Path.of(root, segments));
-    }
-
-    private void terminateProcessTree(Process process) {
-        List<ProcessHandle> handles = new ArrayList<>(process.toHandle().descendants().toList());
-        Collections.reverse(handles);
-        handles.forEach(ProcessHandle::destroyForcibly);
-        process.destroyForcibly();
     }
 
     private String readProcessOutput(Process process) throws Exception {

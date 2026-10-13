@@ -2,7 +2,7 @@
 
 CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言驱动代码阅读、文件修改、命令执行和项目创建。
 
-当前版本：**v0.14.0 — 长上下文与浏览器 MCP**。
+当前版本：**v0.15.0 — CDP 会话复用与登录态浏览器访问**。
 
 ## 当前能力
 
@@ -50,6 +50,8 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 - **运行中取消与通知**：任务运行时可输入 `/cancel` 请求取消；MCP 工具或资源列表变更通知会更新本地缓存和工具定义。
 - **长上下文策略**：按模型上下文窗口调整 Token 预算、Memory 压缩阈值与 RAG 返回数量，并统一展示 Token 用量。
 - **浏览器 MCP**：首次启动可创建 Chrome DevTools MCP 默认配置，Agent 可调用浏览器工具处理需要 JavaScript 渲染的页面。
+- **浏览器会话复用**：支持连接用户已开启远程调试的 Chrome，复用登录态访问需要授权的页面。
+- **浏览器安全策略**：敏感页面和非 CodeMate 创建的页面关闭操作会被策略层拦截，并记录浏览器审计元数据。
 
 ## 快速开始
 
@@ -59,7 +61,7 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 Copy-Item .env.example .env
 # 编辑 .env，填写 GLM_API_KEY
 mvn clean package
-java -jar target/codemate-0.14.0.jar
+java -jar target/codemate-0.15.0.jar
 ```
 
 模型配置从 `~/.codemate/config.json`、环境变量和 `.env` 读取。至少配置 `GLM_API_KEY` 或 `DEEPSEEK_API_KEY`；模型名可分别通过 `GLM_MODEL` 和 `DEEPSEEK_MODEL` 指定。`.env` 已加入 Git 忽略规则。
@@ -110,6 +112,7 @@ Web 搜索默认优先复用 `GLM_API_KEY` 选择智谱，也可以通过 `SEARC
 | `/mcp resources <名称>` | 查看 MCP Server 提供的资源 |
 | `/mcp prompts <名称>` | 查看 MCP Server 提供的 Prompt 模板 |
 | `/cancel` | 请求取消当前正在运行的 Agent 任务 |
+| `/browser status\|connect\|disconnect\|tabs` | 查看或切换隔离/共享浏览器会话 |
 | `/clear` | 清空短期对话历史和本次会话的“全部放行”记录，保留长期记忆 |
 | `/index [路径]` | 为指定路径建立或重建代码索引，默认当前目录 |
 | `/search <查询>` | 使用自然语言混合检索代码 |
@@ -172,6 +175,7 @@ src/main/java/com/codemate/
 ├── mcp/                  MCP Client、服务管理、JSON-RPC、配置与传输层
 ├── runtime/              任务取消 Token 与运行期取消上下文
 ├── context/              上下文窗口策略与 Token 使用量格式化
+├── browser/              CDP 连通性、会话模式与敏感页面策略
 ├── web/                  搜索 Provider、网络策略、网页抓取和正文提取
 ├── util/                 ANSI 样式、Jieba 工厂与终端 Markdown 渲染
 ├── llm/                  统一接口、兼容基类、GLM 与 DeepSeek 客户端
@@ -207,6 +211,7 @@ src/main/java/com/codemate/
 - 命令黑名单只用于快速拦截典型危险形式，不能覆盖编码、间接执行和所有 Shell 语义；危险操作仍应启用 HITL 并由用户审阅。
 - MCP 工具调用仍只将文本内容转换为工具结果；图像等非文本结果会以提示文本返回。Prompt 模板只查看不执行，尚未实现 OAuth、sampling、自动重启和进度通知 UI。
 - Chrome DevTools MCP 默认使用隔离浏览器会话；本阶段不将图片内容直接输入模型，优先通过 DOM snapshot 获取文本。
+- 共享浏览器会话会复用用户登录态；敏感页面和关闭页面操作仍受额外策略限制。
 - 尚未实现 MCP。
 
 ## 版本记录
