@@ -2,6 +2,8 @@ package com.codemate.mcp;
 
 import com.codemate.mcp.config.McpConfigLoader;
 import com.codemate.mcp.config.McpServerConfig;
+import com.codemate.mcp.config.McpTrustStore;
+import com.codemate.mcp.transport.McpPidFile;
 import com.codemate.tool.ToolRegistry;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -10,13 +12,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -37,7 +44,9 @@ class McpServerManagerTest {
         registry = new ToolRegistry();
         // 用空 config loader 占位，单独把 server 直接放进 manager（避开真实文件读取）
         manager = new McpServerManager(registry, tempDir,
-                new McpConfigLoader(tempDir.resolve("user.json"), tempDir.resolve("project.json"), tempDir));
+                new McpConfigLoader(tempDir.resolve("user.json"), tempDir.resolve("project.json"), tempDir),
+                new McpTrustStore(tempDir.resolve("mcp-trust.json")),
+                new McpPidFile(tempDir.resolve("mcp-pids.json")));
     }
 
     @AfterEach
@@ -80,6 +89,66 @@ class McpServerManagerTest {
     }
 
     @Test
+    void untrustedProjectServerIsNotStartedUntilTrusted(@TempDir Path trustDir) throws Exception {
+        McpTrustStore trustStore = new McpTrustStore(trustDir.resolve("mcp-trust.json"));
+        manager = new McpServerManager(registry, trustDir,
+                new McpConfigLoader(trustDir.resolve("user.json"), trustDir.resolve("project.json"), trustDir),
+                trustStore, new McpPidFile(trustDir.resolve("mcp-pids.json")));
+        Path projectConfig = trustDir.resolve("project.json");
+        McpServerConfig config = httpConfig(webServer);
+        config.markProjectScoped(projectConfig, McpConfigLoader.fingerprint(config));
+        loadServersFromMap(Map.of("repo", config));
+
+        manager.startAll();
+
+        McpServer server = manager.server("repo");
+        assertEquals(McpServerStatus.UNTRUSTED, server.status());
+        assertEquals(0, webServer.getRequestCount(), "确认前不能连 url / 起进程");
+        assertFalse(registry.hasTool("mcp__repo__echo"));
+        assertTrue(manager.untrustedStartupNote().contains("repo"));
+        assertTrue(manager.formatStatus().contains("/mcp trust"));
+        assertTrue(manager.restart("repo").contains("/mcp trust repo"), "restart 不能绕过确认");
+        assertTrue(manager.enable("repo").contains("/mcp trust repo"), "enable 不能绕过确认");
+        assertEquals(0, webServer.getRequestCount());
+
+        enqueueInitialize();
+        enqueueToolsList(toolJson("echo", "Echo back text"));
+        String result = manager.trust("repo");
+
+        assertTrue(result.contains("已启动"), result);
+        assertEquals(McpServerStatus.READY, server.status());
+        assertTrue(registry.hasTool("mcp__repo__echo"));
+        assertTrue(trustStore.isTrusted(projectConfig, "repo", McpConfigLoader.fingerprint(config)));
+        assertEquals("", manager.untrustedStartupNote());
+    }
+
+    @Test
+    void changedProjectConfigNeedsConfirmationAgain(@TempDir Path trustDir) throws Exception {
+        McpTrustStore trustStore = new McpTrustStore(trustDir.resolve("mcp-trust.json"));
+        manager = new McpServerManager(registry, trustDir,
+                new McpConfigLoader(trustDir.resolve("user.json"), trustDir.resolve("project.json"), trustDir),
+                trustStore, new McpPidFile(trustDir.resolve("mcp-pids.json")));
+        Path projectConfig = trustDir.resolve("project.json");
+        trustStore.trust(projectConfig, "repo", "old-fingerprint");
+        McpServerConfig config = httpConfig(webServer);
+        config.markProjectScoped(projectConfig, McpConfigLoader.fingerprint(config));
+        loadServersFromMap(Map.of("repo", config));
+
+        manager.startAll();
+
+        assertEquals(McpServerStatus.UNTRUSTED, manager.server("repo").status());
+        assertEquals(0, webServer.getRequestCount());
+    }
+
+    @Test
+    void trustOnUserServerIsANoOp() {
+        loadServersFromMap(Map.of("demo", httpConfig(webServer)));
+
+        assertTrue(manager.trust("demo").contains("无需确认"));
+        assertEquals(0, webServer.getRequestCount());
+    }
+
+    @Test
     void singleServerFailureDoesNotBlockOthers() throws Exception {
         // 一个 OK 的 server + 一个引用未设置 ${VAR} 的 server
         enqueueInitialize();
@@ -102,6 +171,28 @@ class McpServerManagerTest {
                 "bad 应标 ERROR");
         assertNotNull(byName.get("bad").errorMessage());
         assertTrue(registry.hasTool("mcp__good__ok"));
+    }
+
+    @Test
+    void boundedStartupWaitReturnsWhileSlowServerContinuesStarting() throws Exception {
+        webServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\"}}")
+                .setBodyDelay(3, TimeUnit.SECONDS));
+
+        loadServersFromMap(Map.of("slow", httpConfig(webServer)));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        long started = System.nanoTime();
+        manager.startAll(new PrintStream(out, true, StandardCharsets.UTF_8), Duration.ofMillis(100));
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        McpServer server = manager.server("slow");
+        assertTrue(elapsedMillis < 1500, "bounded startup should return before initialize timeout");
+        assertEquals(McpServerStatus.STARTING, server.status());
+        assertFalse(registry.hasTool("mcp__slow__echo"));
+        assertTrue(out.toString(StandardCharsets.UTF_8).contains("后台继续启动"));
     }
 
     @Test
@@ -166,6 +257,28 @@ class McpServerManagerTest {
     }
 
     // ---- helpers ----
+
+    @Test
+    void statusTableKeepsErrorsReadableInNarrowTerminal() throws Exception {
+        loadServersFromMap(Map.of("mock", httpConfig(webServer)));
+        manager.server("mock").status(McpServerStatus.ERROR);
+        manager.server("mock").errorMessage("连接失败，请检查服务地址和本地网络配置");
+        String previous = System.getProperty("codemate.render.columns");
+        try {
+            System.setProperty("codemate.render.columns", "40");
+            String output = manager.formatStatus();
+            assertTrue(output.contains("mock"));
+            assertTrue(output.contains("失败"));
+            assertTrue(output.contains("/mcp logs <name>"));
+            for (String line : output.split("\n")) {
+                assertTrue(com.codemate.util.TerminalTable.width(line) <= 40, line);
+            }
+            assertEquals(0, webServer.getRequestCount(), "查看列表不会启动连接");
+        } finally {
+            if (previous == null) System.clearProperty("codemate.render.columns");
+            else System.setProperty("codemate.render.columns", previous);
+        }
+    }
 
     private void enqueueInitialize() {
         enqueueInitialize(null);

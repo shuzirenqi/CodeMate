@@ -1,5 +1,13 @@
 # 版本记录
 
+## v16.1.0 — 同步最新完整 Agent 能力
+
+- 将完整实现更新到基线提交 `78786aa`，并统一为 CodeMate 包名、配置前缀、命令和产品文案。
+- 补齐 Skill、inline TUI、LSP 诊断、Git Side-History、Prompt 分层、Runtime API、图片输入和微信 iLink 文本通道等后续阶段能力。
+- 同步多模型目录、MCP 稳定性增强、RAG 增量索引、工具参数校验、长期记忆改进和 Native AgentBench 评测框架。
+
+验证结果：`mvn clean package` 通过；核心模块 257 个测试通过（6 个平台条件测试跳过）；TUI 冒烟 135 个测试全部通过。`mvn test -Pquick` 中 Native AgentBench 的 Windows/POSIX 环境相关用例仍失败，未调用真实模型、未运行 Docker，也未继续正式评测。
+
 ## v0.15.0 — CDP 会话复用与登录态浏览器访问
 
 - 新增浏览器会话管理，支持查看状态、连接共享 Chrome、断开并切回隔离模式，以及查看共享会话的标签页。

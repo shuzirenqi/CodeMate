@@ -3,14 +3,18 @@ package com.codemate.agent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.codemate.history.ConversationLedger;
 import com.codemate.llm.GLMClient;
 import com.codemate.llm.LlmClient;
 import com.codemate.memory.LongTermMemory;
 import com.codemate.memory.MemoryManager;
 import com.codemate.tool.ToolRegistry;
+import com.codemate.tool.ToolRegistry.ToolExecutionResult;
+import com.codemate.tool.ToolRegistry.ToolInvocation;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -24,6 +28,25 @@ import java.util.function.Function;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentOrchestratorTest {
+
+    @Test
+    void shouldShareOneLedgerAcrossPlannerWorkersAndReviewer(@TempDir Path tempDir)
+            throws Exception {
+        AgentOrchestrator orchestrator = new AgentOrchestrator(new GLMClient("test-key"));
+        ConversationLedger ledger =
+                ConversationLedger.open(tempDir.resolve("history"), "team-session");
+
+        orchestrator.setConversationLedger(ledger);
+
+        assertSame(ledger, readField(orchestrator, "conversationLedger"));
+        assertSame(ledger, readField(readField(orchestrator, "planner"), "conversationLedger"));
+        @SuppressWarnings("unchecked")
+        List<SubAgent> workers = (List<SubAgent>) readField(orchestrator, "workers");
+        for (SubAgent worker : workers) {
+            assertSame(ledger, readField(worker, "conversationLedger"));
+        }
+        assertSame(ledger, readField(readField(orchestrator, "reviewer"), "conversationLedger"));
+    }
 
     @Test
     void shouldParseSimplePlan() {
@@ -184,67 +207,43 @@ class AgentOrchestratorTest {
     }
 
     @Test
-    void shouldParseReviewApproval() {
+    void shouldRejectPlanWithUnknownDependencyInsteadOfBlockingSilently() {
         AgentOrchestrator orchestrator = new AgentOrchestrator(new GLMClient("test-key"));
-
-        // 正常通过的 JSON
-        assertTrue(orchestrator.parseReviewApproval(
-                "{\"approved\": true, \"summary\": \"通过\", \"issues\": []}"));
-
-        // 未通过的 JSON
-        assertFalse(orchestrator.parseReviewApproval(
-                "{\"approved\": false, \"summary\": \"未通过\", \"issues\": [\"缺少错误处理\"]}"));
-
-        // null 或空内容采取保守策略：默认不通过
-        assertFalse(orchestrator.parseReviewApproval(null));
-        assertFalse(orchestrator.parseReviewApproval(""));
-
-        // 含否定关键词的纯文本
-        assertFalse(orchestrator.parseReviewApproval("执行结果未通过审查"));
-        assertFalse(orchestrator.parseReviewApproval("代码质量不合格"));
-
-        // 含肯定关键词的非 JSON 文本
-        assertTrue(orchestrator.parseReviewApproval("审查通过，代码质量良好"));
-
-        // 既无肯定关键词也无 JSON：保守判为不通过
-        assertFalse(orchestrator.parseReviewApproval("hmm"));
-
-        // JSON 缺少 approved 字段：保守判为不通过
-        assertFalse(orchestrator.parseReviewApproval("{\"summary\": \"无 approved 字段\"}"));
-    }
-
-    @Test
-    void shouldParseReviewIssues() {
-        AgentOrchestrator orchestrator = new AgentOrchestrator(new GLMClient("test-key"));
-
-        String reviewJson = """
-                {
-                    "approved": false,
-                    "summary": "存在问题",
-                    "issues": ["缺少错误处理", "代码风格不一致"],
-                    "suggestions": ["添加 try-catch", "统一缩进"]
-                }
+        String planJson = """
+                {"steps": [
+                  {"id": "a", "description": "A", "dependencies": []},
+                  {"id": "b", "description": "B", "dependencies": ["missing"]}
+                ]}
                 """;
 
-        String issues = orchestrator.parseReviewIssues(reviewJson);
-        assertTrue(issues.contains("缺少错误处理"));
-        assertTrue(issues.contains("代码风格不一致"));
+        assertTrue(orchestrator.parsePlan(planJson).isEmpty());
     }
 
     @Test
-    void shouldFallbackToSummaryForIssues() {
-        AgentOrchestrator orchestrator = new AgentOrchestrator(new GLMClient("test-key"));
+    void proseReviewIsTreatedAsRejectionAndTriggersRetry(@TempDir Path tempDir) {
+        StubGLMClient llmClient = new StubGLMClient(List.of(
+                response("""
+                        {"summary": "单步任务", "steps": [
+                          {"id": "s1", "description": "执行任务", "type": "COMMAND", "dependencies": []}
+                        ]}
+                        """),
+                response("第一次执行结果"),
+                // 旧实现会把含“通过”的纯文本判为批准；现在不是 JSON 结论就按未通过处理。
+                response("审查通过，代码质量良好"),
+                response("第二次执行结果"),
+                response("{\"approved\": true, \"summary\": \"通过\", \"issues\": []}")
+        ));
 
-        String reviewJson = "{\"approved\": false, \"summary\": \"质量不达标\", \"issues\": []}";
-        String issues = orchestrator.parseReviewIssues(reviewJson);
-        assertEquals("质量不达标", issues);
-    }
+        AgentOrchestrator orchestrator = new AgentOrchestrator(
+                llmClient,
+                new ToolRegistry(),
+                new NoOpMemoryManager(tempDir.toFile())
+        );
 
-    @Test
-    void shouldHandleInvalidReviewJson() {
-        AgentOrchestrator orchestrator = new AgentOrchestrator(new GLMClient("test-key"));
-        String issues = orchestrator.parseReviewIssues("not valid json");
-        assertEquals("审查未通过，请改进执行结果", issues);
+        String finalResult = orchestrator.run("测试审查结论解析");
+
+        assertTrue(finalResult.contains("第二次执行结果"));
+        assertFalse(finalResult.contains("第一次执行结果"));
     }
 
     @Test
@@ -394,8 +393,61 @@ class AgentOrchestratorTest {
         assertTrue(finalResult.contains("[step_2] ⏳ 第二步"));
     }
 
+    @Test
+    void dependentTeamStepInheritsTypedSearchUrlProvenance(@TempDir Path tempDir) {
+        StubGLMClient llmClient = new StubGLMClient(List.of(
+                response("""
+                        {
+                          "summary": "搜索后抓取",
+                          "steps": [
+                            {"id": "search", "description": "搜索目标文章", "type": "ANALYSIS", "dependencies": []},
+                            {"id": "fetch", "description": "抓取目标文章", "type": "ANALYSIS", "dependencies": ["search"]}
+                          ]
+                        }
+                        """),
+                toolResponse("search", "web_search", "{\"query\":\"目标文章\"}"),
+                response("已定位目标文章"),
+                response("{\"approved\":true,\"summary\":\"通过\",\"issues\":[]}"),
+                toolResponse("fetch", "web_fetch", "{\"url\":\"https://example.com/article\"}"),
+                response("已抓取正文"),
+                response("{\"approved\":true,\"summary\":\"通过\",\"issues\":[]}")
+        ));
+        RecordingWebRegistry registry = new RecordingWebRegistry();
+        AgentOrchestrator orchestrator = new AgentOrchestrator(
+                llmClient,
+                registry,
+                new NoOpMemoryManager(tempDir.toFile())
+        );
+
+        String finalResult = orchestrator.run("帮我搜索目标文章并抓取正文");
+
+        assertTrue(finalResult.contains("已抓取正文"));
+        assertEquals(List.of("web_search", "web_fetch"),
+                registry.invocations.stream().map(ToolInvocation::name).toList());
+        assertTrue(llmClient.toolSnapshots.get(4).stream()
+                .anyMatch(tool -> "web_fetch".equals(tool.name())),
+                "依赖 worker 的首轮 schema 应继承前置 search provenance");
+    }
+
     private static LlmClient.ChatResponse response(String content) {
         return new LlmClient.ChatResponse("assistant", content, null, 100, 20);
+    }
+
+    private static LlmClient.ChatResponse toolResponse(String id, String name, String arguments) {
+        return new LlmClient.ChatResponse(
+                "assistant",
+                "",
+                List.of(new LlmClient.ToolCall(
+                        id,
+                        new LlmClient.ToolCall.Function(name, arguments))),
+                100,
+                20);
+    }
+
+    private static Object readField(Object target, String fieldName) throws Exception {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.get(target);
     }
 
     private static final class NoOpMemoryManager extends MemoryManager {
@@ -406,6 +458,7 @@ class AgentOrchestratorTest {
 
     private static final class StubGLMClient extends GLMClient {
         private final Queue<ChatResponse> responses;
+        private final List<List<Tool>> toolSnapshots = new ArrayList<>();
 
         private StubGLMClient(List<ChatResponse> responses) {
             super("test-key");
@@ -419,6 +472,7 @@ class AgentOrchestratorTest {
 
         @Override
         public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) throws IOException {
+            toolSnapshots.add(tools == null ? List.of() : List.copyOf(tools));
             ChatResponse response = responses.poll();
             if (response == null) {
                 throw new IOException("缺少预设响应");
@@ -427,6 +481,30 @@ class AgentOrchestratorTest {
                 listener.onContentDelta(response.content());
             }
             return response;
+        }
+    }
+
+    private static final class RecordingWebRegistry extends ToolRegistry {
+        private final List<ToolInvocation> invocations = new ArrayList<>();
+
+        @Override
+        public List<ToolExecutionResult> executeTools(List<ToolInvocation> calls) {
+            invocations.addAll(calls);
+            return calls.stream()
+                    .map(call -> new ToolExecutionResult(
+                            call.id(),
+                            call.name(),
+                            call.argumentsJson(),
+                            "web_search".equals(call.name())
+                                    ? "1. 目标文章 https://example.com/article"
+                                    : "已抓取",
+                            0,
+                            false,
+                            List.of(),
+                            true,
+                            "web_search".equals(call.name())
+                                    ? List.of("https://example.com/article") : List.of()))
+                    .toList();
         }
     }
 

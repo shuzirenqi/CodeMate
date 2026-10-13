@@ -14,10 +14,12 @@ import com.codemate.mcp.protocol.McpToolDescriptor;
 import com.codemate.mcp.resources.McpResourceContent;
 import com.codemate.mcp.resources.McpResourceDescriptor;
 import com.codemate.mcp.transport.McpTransport;
+import com.codemate.tool.ToolOutput;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 public class McpClient implements AutoCloseable {
@@ -80,19 +82,25 @@ public class McpClient implements AutoCloseable {
                 continue;
             }
             String description = tool.path("description").asText("");
-            JsonNode schema = McpSchemaSanitizer.sanitize(tool.path("inputSchema"));
+            JsonNode rawSchema = tool.path("inputSchema");
+            JsonNode schema = McpSchemaSanitizer.sanitize(rawSchema);
             descriptors.add(new McpToolDescriptor(
                     serverName,
                     name,
                     McpToolDescriptor.namespaced(serverName, name),
                     description,
-                    schema
+                    schema,
+                    rawSchema.isObject() ? rawSchema : null
             ));
         }
         return descriptors;
     }
 
     public String callTool(String toolName, String argumentsJson) throws IOException {
+        return callToolOutput(toolName, argumentsJson).text();
+    }
+
+    public ToolOutput callToolOutput(String toolName, String argumentsJson) throws IOException {
         JsonNode args;
         if (argumentsJson == null || argumentsJson.isBlank()) {
             args = JsonNodeFactory.instance.objectNode();
@@ -102,11 +110,11 @@ public class McpClient implements AutoCloseable {
         ObjectNode params = McpCallToolRequest.toJson(toolName, args);
         JsonNode result = rpc.request("tools/call", params, 60);
         McpCallToolResult callResult = MAPPER.treeToValue(result, McpCallToolResult.class);
-        String formatted = callResult.formatForLlm();
+        ToolOutput output = callResult.toToolOutput();
         if (callResult.isError()) {
-            return "MCP 工具返回错误: " + formatted;
+            return ToolOutput.failure("MCP 工具返回错误: " + output.text(), output.imageParts());
         }
-        return formatted;
+        return output;
     }
 
     public List<McpResourceDescriptor> listResources() throws IOException {
@@ -241,6 +249,23 @@ public class McpClient implements AutoCloseable {
                 .replace("\"", "&quot;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;");
+    }
+
+    /** 探活：server 回了结果或回了“不支持 ping”的错误都算活着，超时或断开才抛 IOException。 */
+    public void ping(long timeoutMillis) throws IOException {
+        try {
+            rpc.request("ping", JsonNodeFactory.instance.objectNode(), timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (JsonRpcException ignored) {
+            // 回了 JSON-RPC 错误说明进程还在正常读写
+        }
+    }
+
+    public boolean hasPendingRequests() {
+        return rpc.hasPendingRequests();
+    }
+
+    public void onUnexpectedClose(Consumer<String> listener) {
+        transport.onUnexpectedClose(listener);
     }
 
     public List<String> stderrLines() {

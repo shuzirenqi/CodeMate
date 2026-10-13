@@ -12,8 +12,6 @@ public class ExecutionPlan {
     private final List<String> executionOrder;    // 执行顺序（拓扑排序后）
     private PlanStatus status;
     private String summary;                       // 计划摘要
-    private long startTime;
-    private long endTime;
 
     public enum PlanStatus {
         CREATED,      // 刚创建
@@ -36,11 +34,8 @@ public class ExecutionPlan {
     public String getGoal() { return goal; }
     public PlanStatus getStatus() { return status; }
     public String getSummary() { return summary; }
-    public long getStartTime() { return startTime; }
-    public long getEndTime() { return endTime; }
 
     public void setSummary(String summary) { this.summary = summary; }
-    public void setStatus(PlanStatus status) { this.status = status; }
 
     /**
      * 添加任务
@@ -68,15 +63,6 @@ public class ExecutionPlan {
      */
     public Collection<Task> getAllTasks() {
         return tasks.values();
-    }
-
-    /**
-     * 获取根任务（没有依赖的任务）
-     */
-    public List<Task> getRootTasks() {
-        return tasks.values().stream()
-                .filter(t -> t.getDependencies().isEmpty())
-                .toList();
     }
 
     /**
@@ -164,6 +150,48 @@ public class ExecutionPlan {
     }
 
     /**
+     * 把直接或间接依赖某个失败任务、仍处于 PENDING 的任务标记为 SKIPPED。
+     * 返回按执行顺序排列的被跳过任务，调用方据此向用户说明哪些工作没有执行。
+     */
+    public List<Task> skipDependentsOf(String failedTaskId) {
+        Set<String> blocked = new HashSet<>();
+        Deque<String> queue = new ArrayDeque<>(List.of(failedTaskId));
+        while (!queue.isEmpty()) {
+            Task current = tasks.get(queue.poll());
+            if (current == null) {
+                continue;
+            }
+            for (String dependentId : current.getDependents()) {
+                if (blocked.add(dependentId)) {
+                    queue.add(dependentId);
+                }
+            }
+        }
+        return skipPendingMatching(blocked::contains);
+    }
+
+    /** 停止执行时把所有尚未开始的任务标记为 SKIPPED。 */
+    public List<Task> skipAllPending() {
+        return skipPendingMatching(id -> true);
+    }
+
+    private List<Task> skipPendingMatching(java.util.function.Predicate<String> selector) {
+        List<Task> skipped = new ArrayList<>();
+        for (String id : orderedIds()) {
+            Task task = tasks.get(id);
+            if (task != null && selector.test(id) && task.getStatus() == Task.TaskStatus.PENDING) {
+                task.markSkipped();
+                skipped.add(task);
+            }
+        }
+        return List.copyOf(skipped);
+    }
+
+    private List<String> orderedIds() {
+        return executionOrder.isEmpty() ? new ArrayList<>(tasks.keySet()) : new ArrayList<>(executionOrder);
+    }
+
+    /**
      * 是否有失败任务
      */
     public boolean hasFailed() {
@@ -176,7 +204,6 @@ public class ExecutionPlan {
      */
     public void markStarted() {
         this.status = PlanStatus.RUNNING;
-        this.startTime = System.currentTimeMillis();
     }
 
     /**
@@ -184,7 +211,6 @@ public class ExecutionPlan {
      */
     public void markCompleted() {
         this.status = PlanStatus.COMPLETED;
-        this.endTime = System.currentTimeMillis();
     }
 
     /**
@@ -192,16 +218,13 @@ public class ExecutionPlan {
      */
     public void markFailed() {
         this.status = PlanStatus.FAILED;
-        this.endTime = System.currentTimeMillis();
     }
 
     /**
-     * 获取总耗时
+     * 标记取消：用户按 ESC 中断执行
      */
-    public long getDuration() {
-        if (startTime == 0) return 0;
-        if (endTime == 0) return System.currentTimeMillis() - startTime;
-        return endTime - startTime;
+    public void markCancelled() {
+        this.status = PlanStatus.CANCELLED;
     }
 
     /**

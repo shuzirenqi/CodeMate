@@ -1,87 +1,111 @@
 package com.codemate.plan;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.codemate.history.ConversationLedger;
 import com.codemate.llm.LlmClient;
+import com.codemate.llm.LlmTraceLogger;
+import com.codemate.prompt.PromptAssembler;
+import com.codemate.prompt.PromptContext;
+import com.codemate.prompt.PromptMode;
+import com.codemate.prompt.ProjectMemoryLoader;
 import com.codemate.util.AnsiStyle;
 import com.codemate.util.TerminalMarkdownRenderer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.PrintStream;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.*;
+import java.util.function.Supplier;
 
 /**
  * 规划器 - 使用LLM将复杂任务分解为执行计划
  */
 public class Planner {
+    private static final Logger log = LoggerFactory.getLogger(Planner.class);
+
     private final LlmClient llmClient;
-    private final ObjectMapper mapper = new ObjectMapper();
-
-    // 规划提示词
-    private static final String PLANNING_PROMPT = """
-            你是一个任务规划专家。请将用户的复杂任务分解为一系列可执行的子任务。
-
-            可用任务类型：
-            - FILE_READ: 读取文件内容
-            - FILE_WRITE: 写入文件内容
-            - COMMAND: 执行Shell命令
-            - ANALYSIS: 分析结果并做出决策
-            - VERIFICATION: 验证结果是否正确
-
-            请按以下JSON格式输出执行计划：
-            {
-                "summary": "任务摘要",
-                "tasks": [
-                    {
-                        "id": "task_1",
-                        "description": "任务描述",
-                        "type": "FILE_READ",
-                        "dependencies": []
-                    },
-                    {
-                        "id": "task_2",
-                        "description": "任务描述",
-                        "type": "FILE_WRITE",
-                        "dependencies": ["task_1"]
-                    }
-                ]
-            }
-
-            规则：
-            1. 每个任务必须有唯一的id（如 task_1, task_2）
-            2. dependencies列出依赖的任务id
-            3. 任务应该按执行顺序排列
-            4. 任务描述要具体明确
-            5. 简单任务（如列目录、读取单个文件、执行单条命令）允许只生成1-3个任务；不要为了凑步数引入无关步骤
-            6. 复杂任务再拆分为5-10个子任务
-            7. 不要为了“保存中间结果”而额外创建 FILE_WRITE / FILE_READ，除非用户明确要求落盘
-            8. 如果一个任务一步就能完成，就保持最短计划
-
-            只输出JSON，不要有其他内容。
-            """;
+    private final PrintStream out;
+    // 与评测重放器的 json.loads 保持一致：JSON 后面跟着说明文字、键重复，都算不合法
+    private final ObjectMapper mapper = JsonMapper.builder()
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+            .build();
+    private final PromptAssembler promptAssembler = PromptAssembler.createDefault();
+    private ConversationLedger conversationLedger = ConversationLedger.disabled();
+    private Supplier<String> projectMemorySupplier = () ->
+            ProjectMemoryLoader.createDefault(Path.of(".").toAbsolutePath().normalize()).loadForPrompt();
 
     public Planner(LlmClient llmClient) {
+        this(llmClient, System.out);
+    }
+
+    public Planner(LlmClient llmClient, PrintStream out) {
         this.llmClient = llmClient;
+        this.out = out == null ? System.out : out;
+    }
+
+    public void setProjectMemorySupplier(Supplier<String> projectMemorySupplier) {
+        this.projectMemorySupplier = projectMemorySupplier == null ? () -> "" : projectMemorySupplier;
+    }
+
+    public void setConversationLedger(ConversationLedger conversationLedger) {
+        this.conversationLedger = conversationLedger == null
+                ? ConversationLedger.disabled()
+                : conversationLedger;
     }
 
     /**
-     * 为复杂任务创建执行计划
+     * 为任务创建执行计划。所有目标都交给模型规划，不在调用模型前用关键词判断任务是否“简单”：
+     * 关键词判断会把“删除 src 下所有文件”“执行 mvn test，修复失败的测试”这类输入误判成单步任务，
+     * 一步就能完成的目标由规划提示词约束模型只给出最短计划。
      */
     public ExecutionPlan createPlan(String goal) throws IOException {
-        System.out.println("📋 正在规划任务: " + goal + "\n");
+        out.println("📋 正在规划任务: " + goal + "\n");
+        return requestPlan(goal, "请为以下任务制定执行计划：\n" + goal);
+    }
 
-        if (isSimpleGoal(goal)) {
-            return createMinimalPlan(goal);
-        }
+    /**
+     * 审阅时用户按 I 补充要求：把当前计划和补充要求一起交给模型修改，
+     * 不受补充要求影响的任务保持原样，修改结果仍走同一套严格校验。
+     */
+    public ExecutionPlan revisePlan(ExecutionPlan current, String feedback) throws IOException {
+        String revisedGoal = current.getGoal() + "\n补充要求：" + feedback;
+        out.println("📋 正在按补充要求修改计划: " + feedback + "\n");
+        String request = "请为以下任务制定执行计划：\n" + revisedGoal
+                + "\n\n下面是用户刚审阅过的当前计划。请在它的基础上按补充要求修改，"
+                + "不受补充要求影响的任务保持原样，输出修改后的完整计划：\n"
+                + toPlanJson(current);
+        return requestPlan(revisedGoal, request);
+    }
 
-        // 构建规划请求
+    private ExecutionPlan requestPlan(String goal, String planningRequest) throws IOException {
         List<LlmClient.Message> messages = Arrays.asList(
-                LlmClient.Message.system(PLANNING_PROMPT),
-                LlmClient.Message.user("请为以下任务制定执行计划：\n" + goal)
+                LlmClient.Message.system(promptAssembler.assemble(PromptMode.PLANNER, PromptContext.builder()
+                        .projectMemoryContext(buildProjectMemoryContext())
+                        .build())),
+                LlmClient.Message.user(planningRequest)
         );
+        conversationLedger.appendMessage("plan", "planner", "system_prompt", messages.get(0));
+        conversationLedger.appendMessage("plan", "planner", "planning_request", messages.get(1));
 
         // 调用LLM生成计划
-        PlanningStreamRenderer streamRenderer = new PlanningStreamRenderer();
+        PlanningStreamRenderer streamRenderer = new PlanningStreamRenderer(out);
         LlmClient.ChatResponse response = llmClient.chat(messages, null, streamRenderer);
+        conversationLedger.appendMessage(
+                "plan",
+                "planner",
+                "llm_response",
+                LlmClient.Message.assistant(response.reasoningContent(), response.content()));
+        LlmTraceLogger.logReasoning(log, "planner", llmClient, response.reasoningContent());
         streamRenderer.finish();
         String planJson = response.content();
 
@@ -89,18 +113,42 @@ public class Planner {
         return parsePlan(goal, planJson);
     }
 
+    private String buildProjectMemoryContext() {
+        try {
+            String context = projectMemorySupplier.get();
+            return context == null ? "" : context.trim();
+        } catch (Exception e) {
+            log.warn("Failed to load PAI.md project memory for planner", e);
+            return "";
+        }
+    }
+
     /**
      * 解析LLM生成的计划JSON
      */
     private ExecutionPlan parsePlan(String goal, String planJson) throws IOException {
+        if (planJson == null || planJson.isBlank()) {
+            throw new IOException("计划必须包含非空 JSON 对象");
+        }
         // 清理可能的markdown代码块
         String cleaned = planJson.replaceAll("```json\\s*", "")
                 .replaceAll("```\\s*", "")
                 .trim();
 
-        JsonNode root = mapper.readTree(cleaned);
+        JsonNode root;
+        try {
+            root = mapper.readTree(cleaned);
+        } catch (JsonProcessingException e) {
+            throw new IOException("计划不是合法的 JSON：" + e.getOriginalMessage(), e);
+        }
+        if (root == null || !root.isObject()) {
+            throw new IOException("计划必须是 JSON 对象");
+        }
         String summary = root.path("summary").asText();
         JsonNode tasksNode = root.path("tasks");
+        if (!tasksNode.isArray() || tasksNode.isEmpty()) {
+            throw new IOException("计划 tasks 必须是非空数组");
+        }
 
         ExecutionPlan plan = new ExecutionPlan(generatePlanId(), goal);
         plan.setSummary(summary);
@@ -110,11 +158,21 @@ public class Planner {
         int taskIndex = 1;
 
         for (JsonNode taskNode : tasksNode) {
-            String originalId = taskNode.path("id").asText();
+            JsonNode idNode = taskNode.path("id");
+            if (!taskNode.isObject() || !idNode.isTextual() || idNode.asText().isBlank()) {
+                throw new IOException("计划任务必须具有非空字符串 id");
+            }
+            String originalId = idNode.asText();
             String newId = "task_" + taskIndex++;
-            idMapping.put(originalId, newId);
+            if (idMapping.putIfAbsent(originalId, newId) != null) {
+                throw new IOException("计划中存在重复任务 id");
+            }
 
-            String description = taskNode.path("description").asText();
+            JsonNode descriptionNode = taskNode.path("description");
+            if (!descriptionNode.isMissingNode() && !descriptionNode.isTextual()) {
+                throw new IOException("计划任务 description 必须是字符串");
+            }
+            String description = descriptionNode.asText();
             String typeStr = taskNode.path("type").asText();
             Task.TaskType type = parseTaskType(typeStr);
 
@@ -128,15 +186,20 @@ public class Planner {
             Task task = plan.getTask(newId);
 
             JsonNode depsNode = taskNode.path("dependencies");
+            if (!depsNode.isMissingNode() && !depsNode.isArray()) {
+                throw new IOException("计划 dependencies 必须是任务 id 数组");
+            }
             if (depsNode.isArray()) {
                 for (JsonNode depNode : depsNode) {
-                    String originalDepId = depNode.asText();
-                    String newDepId = idMapping.getOrDefault(originalDepId, originalDepId);
-                    Task dep = plan.getTask(newDepId);
-                    if (dep != null) {
-                        task.addDependency(newDepId);
-                        dep.addDependent(task.getId());
+                    if (!depNode.isTextual() || !idMapping.containsKey(depNode.asText())) {
+                        // Never silently remove an edge or resolve a guessed normalized alias.
+                        throw new IOException("计划依赖必须引用已声明的任务 id");
                     }
+                    String originalDepId = depNode.asText();
+                    String newDepId = idMapping.get(originalDepId);
+                    Task dep = plan.getTask(newDepId);
+                    task.addDependency(newDepId);
+                    dep.addDependent(task.getId());
                 }
             }
         }
@@ -147,6 +210,26 @@ public class Planner {
         }
 
         return plan;
+    }
+
+    private String toPlanJson(ExecutionPlan plan) {
+        ObjectNode root = mapper.createObjectNode();
+        root.put("summary", plan.getSummary() == null ? "" : plan.getSummary());
+        ArrayNode tasks = root.putArray("tasks");
+        for (String taskId : plan.getExecutionOrder()) {
+            Task task = plan.getTask(taskId);
+            ObjectNode node = tasks.addObject();
+            node.put("id", task.getId());
+            node.put("description", task.getDescription());
+            node.put("type", task.getType().name());
+            ArrayNode deps = node.putArray("dependencies");
+            task.getDependencies().forEach(deps::add);
+        }
+        try {
+            return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("计划序列化失败", e);
+        }
     }
 
     /**
@@ -174,7 +257,7 @@ public class Planner {
      * 根据执行结果重新规划
      */
     public ExecutionPlan replan(ExecutionPlan failedPlan, String failureReason) throws IOException {
-        System.out.println("🔄 重新规划，原因: " + failureReason + "\n");
+        out.println("🔄 重新规划，原因: " + failureReason + "\n");
 
         StringBuilder context = new StringBuilder();
         context.append("原任务: ").append(failedPlan.getGoal()).append("\n");
@@ -194,85 +277,15 @@ public class Planner {
         return createPlan(context.toString());
     }
 
-    private boolean isSimpleGoal(String goal) {
-        if (goal == null) {
-            return false;
-        }
-
-        String normalized = goal.trim();
-        if (normalized.isEmpty()) {
-            return false;
-        }
-
-        boolean hasMultiStepCue = normalized.contains("然后")
-                || normalized.contains("并且")
-                || normalized.contains("并")
-                || normalized.contains("再")
-                || normalized.contains("最后")
-                || normalized.contains("同时")
-                || normalized.contains("先")
-                || normalized.contains("之后")
-                || normalized.contains("接着")
-                || normalized.contains("以及");
-        if (hasMultiStepCue) {
-            return false;
-        }
-
-        if (normalized.length() > 30) {
-            return false;
-        }
-
-        return normalized.contains("列出")
-                || normalized.contains("查看")
-                || normalized.contains("读取")
-                || normalized.contains("显示")
-                || normalized.contains("执行")
-                || normalized.contains("运行")
-                || normalized.contains("搜索")
-                || normalized.contains("当前目录")
-                || normalized.contains("文件");
-    }
-
-    private ExecutionPlan createMinimalPlan(String goal) {
-        ExecutionPlan plan = new ExecutionPlan(generatePlanId(), goal);
-        plan.setSummary(buildMinimalSummary(goal));
-        plan.addTask(new Task("task_1", goal.trim(), inferSimpleTaskType(goal)));
-        if (!plan.computeExecutionOrder()) {
-            throw new IllegalStateException("简单计划不应出现循环依赖");
-        }
-        return plan;
-    }
-
-    private String buildMinimalSummary(String goal) {
-        String normalized = goal == null ? "" : goal.trim();
-        if (normalized.isEmpty()) {
-            return "执行简单任务";
-        }
-        return "直接执行简单任务：" + normalized;
-    }
-
-    private Task.TaskType inferSimpleTaskType(String goal) {
-        String normalized = goal == null ? "" : goal.trim();
-        if (normalized.contains("读取") || normalized.contains("打开") || normalized.contains("查看")
-                && normalized.contains("文件")) {
-            return Task.TaskType.FILE_READ;
-        }
-        if (normalized.contains("写入") || normalized.contains("修改") || normalized.contains("创建文件")) {
-            return Task.TaskType.FILE_WRITE;
-        }
-        if (normalized.contains("分析") || normalized.contains("总结") || normalized.contains("解释")) {
-            return Task.TaskType.ANALYSIS;
-        }
-        if (normalized.contains("验证") || normalized.contains("检查")) {
-            return Task.TaskType.VERIFICATION;
-        }
-        return Task.TaskType.COMMAND;
-    }
-
     private static final class PlanningStreamRenderer implements LlmClient.StreamListener {
+        private final PrintStream out;
         private TerminalMarkdownRenderer reasoningRenderer;
         private boolean reasoningStarted;
         private boolean streamed;
+
+        private PlanningStreamRenderer(PrintStream out) {
+            this.out = out == null ? System.out : out;
+        }
 
         @Override
         public void onReasoningDelta(String delta) {
@@ -280,13 +293,13 @@ public class Planner {
                 return;
             }
             if (!reasoningStarted) {
-                System.out.println(AnsiStyle.heading("🧠 规划思考"));
-                reasoningRenderer = new TerminalMarkdownRenderer(System.out);
+                out.println(AnsiStyle.heading("🧠 规划思考"));
+                reasoningRenderer = new TerminalMarkdownRenderer(out);
                 reasoningStarted = true;
                 streamed = true;
             }
             reasoningRenderer.append(delta);
-            System.out.flush();
+            out.flush();
         }
 
         private void finish() {
@@ -294,7 +307,7 @@ public class Planner {
                 if (reasoningRenderer != null) {
                     reasoningRenderer.finish();
                 }
-                System.out.println("\n");
+                out.println("\n");
             }
         }
     }

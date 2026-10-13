@@ -55,6 +55,16 @@ public class TerminalHitlHandler implements HitlHandler {
     }
 
     @Override
+    public void onAutoDenied(String toolName, String reason) {
+        out.println("  ⊘ auto 未放行 " + toolName + "：" + reason + "（已交回模型处理）");
+    }
+
+    @Override
+    public void onAutoApproved(String toolName, String reason) {
+        out.println("  ✓ auto 已放行 " + toolName + "：" + reason);
+    }
+
+    @Override
     public boolean isEnabled() {
         return enabled;
     }
@@ -227,11 +237,13 @@ public class TerminalHitlHandler implements HitlHandler {
      * 清除本次会话中积累的"全部放行"记录
      * 在 /clear 或新会话开始时调用
      */
+    @Override
     public void clearApprovedAll() {
         approvedAllByTool.clear();
         approvedAllByServer.clear();
     }
 
+    @Override
     public void clearApprovedAllForServer(String serverName) {
         if (serverName != null) {
             approvedAllByServer.remove(serverName);

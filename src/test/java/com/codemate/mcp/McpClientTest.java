@@ -118,6 +118,27 @@ class McpClientTest {
     }
 
     @Test
+    void callToolOutputCarriesImageContent() throws Exception {
+        InMemoryTransport transport = new InMemoryTransport()
+                .handle("initialize", p -> MAPPER.createObjectNode())
+                .handle("tools/call", p -> readJson("""
+                        {"content": [
+                            {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}
+                        ], "isError": false}
+                        """));
+        McpClient client = new McpClient("demo", transport);
+        client.initialize();
+
+        var output = client.callToolOutput("take_screenshot", "{}");
+
+        assertTrue(output.text().contains("mimeType=image/png"));
+        assertEquals(1, output.imageParts().size());
+        assertEquals("image_base64", output.imageParts().get(0).type());
+        assertEquals("aGVsbG8=", output.imageParts().get(0).imageBase64());
+        client.close();
+    }
+
+    @Test
     void callToolWrapsIsErrorWithExplicitPrefix() throws Exception {
         InMemoryTransport transport = new InMemoryTransport()
                 .handle("initialize", p -> MAPPER.createObjectNode())
@@ -127,9 +148,12 @@ class McpClientTest {
         McpClient client = new McpClient("demo", transport);
         client.initialize();
 
-        String result = client.callTool("read_file", "{\"path\":\"x\"}");
+        var output = client.callToolOutput("read_file", "{\"path\":\"x\"}");
+        String result = output.text();
         assertTrue(result.startsWith("MCP 工具返回错误"), "isError=true 应前置错误标识: " + result);
         assertTrue(result.contains("no such file"));
+        assertFalse(output.successful());
+        assertTrue(output.discoveredUrls().isEmpty());
         client.close();
     }
 

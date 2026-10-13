@@ -1,7 +1,6 @@
 package com.codemate.agent;
 
 import com.codemate.llm.LlmClient;
-import com.codemate.llm.GLMClient;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -90,10 +89,72 @@ class AgentBudgetTest {
     }
 
     @Test
-    void defaultTokenBudgetUsesCurrentModelWindow() {
-        AgentBudget budget = AgentBudget.fromLlmClient(new GLMClient("test-key"));
+    void defaultTokenBudgetIsUnlimited() {
+        // 默认不再用 80% × window 当硬限——长上下文 + 套餐用户场景下太容易撞墙。
+        // 默认死循环防护交给 stagnation；硬轮数只在用户显式配置时启用。
+        AgentBudget budget = AgentBudget.fromSystemProperties();
 
-        assertEquals(160_000, budget.tokenBudget());
+        assertEquals(Integer.MAX_VALUE, budget.tokenBudget());
+    }
+
+    @Test
+    void defaultStagnationWindowLeavesRoomForRunawayReminder() {
+        String old = System.getProperty("codemate.react.stagnation.window");
+        try {
+            System.clearProperty("codemate.react.stagnation.window");
+            AgentBudget budget = AgentBudget.fromSystemProperties();
+
+            // 重复先达到提醒阈值、被提醒之后仍原样重复，才轮到停滞兜底
+            assertTrue(budget.stagnationWindow() > RunawayGuard.DEFAULT_REMIND_AFTER);
+        } finally {
+            if (old == null) {
+                System.clearProperty("codemate.react.stagnation.window");
+            } else {
+                System.setProperty("codemate.react.stagnation.window", old);
+            }
+        }
+    }
+
+    @Test
+    void defaultIterationLimitIsUnlimited() {
+        String old = System.getProperty("codemate.react.hard.max.iterations");
+        try {
+            System.clearProperty("codemate.react.hard.max.iterations");
+            AgentBudget budget = AgentBudget.fromSystemProperties();
+
+            assertEquals(AgentBudget.UNLIMITED_ITERATIONS, budget.hardMaxIterations());
+            assertTrue(!budget.hasHardIterationLimit());
+            for (int i = 0; i < 100; i++) {
+                budget.beginIteration();
+            }
+            assertEquals(AgentBudget.ExitReason.WITHIN_BUDGET, budget.check());
+        } finally {
+            if (old == null) {
+                System.clearProperty("codemate.react.hard.max.iterations");
+            } else {
+                System.setProperty("codemate.react.hard.max.iterations", old);
+            }
+        }
+    }
+
+    @Test
+    void systemPropertyCanEnableHardIterationLimit() {
+        String old = System.getProperty("codemate.react.hard.max.iterations");
+        try {
+            System.setProperty("codemate.react.hard.max.iterations", "2");
+            AgentBudget budget = AgentBudget.fromSystemProperties();
+
+            assertTrue(budget.hasHardIterationLimit());
+            budget.beginIteration();
+            budget.beginIteration();
+            assertEquals(AgentBudget.ExitReason.HARD_ITERATION_LIMIT, budget.check());
+        } finally {
+            if (old == null) {
+                System.clearProperty("codemate.react.hard.max.iterations");
+            } else {
+                System.setProperty("codemate.react.hard.max.iterations", old);
+            }
+        }
     }
 
     @Test
@@ -101,7 +162,7 @@ class AgentBudgetTest {
         String old = System.getProperty("codemate.react.token.budget");
         try {
             System.setProperty("codemate.react.token.budget", "12345");
-            AgentBudget budget = AgentBudget.fromLlmClient(new GLMClient("test-key"));
+            AgentBudget budget = AgentBudget.fromSystemProperties();
 
             assertEquals(12345, budget.tokenBudget());
         } finally {
