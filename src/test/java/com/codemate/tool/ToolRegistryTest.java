@@ -110,6 +110,18 @@ class ToolRegistryTest {
     }
 
     @Test
+    void windowsPowerShellOutputUsesUtf8(@TempDir Path tempDir) throws Exception {
+        assumeTrue(isWindows());
+        ToolRegistry registry = new ToolRegistry();
+        registry.setProjectPath(tempDir.toString());
+
+        String result = registry.executeTool("execute_command",
+                MAPPER.writeValueAsString(Map.of("command", "Write-Output '中文输出'")));
+
+        assertTrue(result.contains("中文输出"));
+    }
+
+    @Test
     void commandSandboxIsDisabledByDefault() {
         ToolRegistry registry = new ToolRegistry();
 

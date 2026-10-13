@@ -24,6 +24,12 @@ public final class CommandGuard {
             new DenyRule("禁止 rm -rf 删除全盘或用户目录",
                     Pattern.compile("(?i)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+(/|~|\\$home)|" +
                             "\\brm\\s+-[a-z]*f[a-z]*r[a-z]*\\s+(/|~|\\$home)")),
+            new DenyRule("禁止 PowerShell 递归强制删除磁盘根目录或用户目录",
+                    Pattern.compile("(?i)\\b(remove-item|ri|rm|del|erase|rd|rmdir)\\b"
+                            + "(?=[^\\r\\n]*-(recurse|rec|r)\\b)"
+                            + "(?=[^\\r\\n]*-(force|for|fo)\\b)"
+                            + "[^\\r\\n]*(?:[a-z]:\\\\(?:[\\s'\"]|$)|"
+                            + "~(?:[\\\\/\\s'\"]|$)|\\$home\\b|\\$env:userprofile\\b)")),
             new DenyRule("禁止 mkfs 格式化磁盘",
                     Pattern.compile("(?i)\\bmkfs(\\.|\\b)")),
             new DenyRule("禁止 dd 写入裸设备",
@@ -32,12 +38,15 @@ public final class CommandGuard {
                     Pattern.compile(":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;\\s*:")),
             new DenyRule("禁止 curl / wget 管道直接执行远端脚本",
                     Pattern.compile("(?i)\\b(curl|wget)\\b[^|\\n]*\\|\\s*(sh|bash|zsh|fish|ksh)\\b")),
+            new DenyRule("禁止 PowerShell 下载内容后直接执行",
+                    Pattern.compile("(?i)\\b(invoke-webrequest|iwr|invoke-restmethod|irm)\\b"
+                            + "[^|\\r\\n]*\\|\\s*(invoke-expression|iex)\\b")),
             new DenyRule("不允许扫描 /、~ 或整个文件系统",
                     Pattern.compile("(?i)\\bfind\\s+(/|~|\\$home)")),
             new DenyRule("禁止 chmod 777 全盘",
                     Pattern.compile("(?i)\\bchmod\\s+-R\\s+777\\s+(/|~)")),
             new DenyRule("禁止 shutdown / reboot / halt",
-                    Pattern.compile("(?i)\\b(shutdown|reboot|halt|poweroff)\\b"))
+                    Pattern.compile("(?i)\\b(shutdown|reboot|halt|poweroff|stop-computer|restart-computer)\\b"))
     );
 
     private CommandGuard() {

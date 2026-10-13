@@ -16,7 +16,7 @@
 4. `list_dir` - 列出目录内容
 5. `glob_files` - 按文件名 glob 查找项目内文件，参数：`{"pattern": "**/*Service.java", "path": ".", "max_results": 50}`
 6. `grep_code` - 按关键字或正则实时搜索项目内代码，优先使用 ripgrep，参数：`{"pattern": "UserService", "glob": "**/*.java", "context_lines": 2, "head_limit": 20, "max_chars": 24000}`
-7. `execute_command` - 在当前项目目录执行短时 Shell 命令
+7. `execute_command` - 在当前项目目录执行短时宿主 Shell 命令（Windows 是 PowerShell，Linux/macOS 是 Bash）
 8. `create_project` - 创建新项目结构
 9. `search_code` - RAG 语义辅助检索代码库，参数：`{"query": "自然语言描述", "top_k": 5}`
 10. `web_search` - 在用户明确要求查找或当前问题确实需要时搜索互联网，参数：`{"query": "搜索关键词", "top_k": 5}`
