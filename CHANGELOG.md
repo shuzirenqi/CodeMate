@@ -1,5 +1,15 @@
 # 版本记录
 
+## v0.13.0 — MCP 高级能力
+
+- 新增 MCP resources 缓存与双轨访问：自动注册资源列表/读取虚拟工具，也支持 `@server:uri` 在普通任务中内联资源内容。
+- 新增 resources、prompts 查看命令，MCP prompts 当前只查看，不自动执行或注入对话。
+- 接入 tools/resources 变更通知：工具列表变更后替换动态注册工具，资源变更后使缓存失效并在下次读取时刷新。
+- 新增 `/cancel`，ReAct、Plan、Team、工具批次与 Shell 命令在执行边界检查取消 Token。
+- 保留 Windows Git Bash 选择、命令进程树终止和原生工作目录输出兼容处理。
+
+验证结果：`mvn clean package` 通过，341 个测试全部通过（其中 6 个 Stdio Transport 测试在 Windows 环境按条件跳过）；资源与通知测试使用内存 MCP Transport，不启动真实 MCP Server 或访问外部服务。
+
 ## v0.12.0 — MCP 协议核心
 
 - 支持 stdio 子进程和 Streamable HTTP 两种 MCP Transport，并实现 JSON-RPC 2.0 请求、响应配对和初始化流程。

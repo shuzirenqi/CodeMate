@@ -2,7 +2,7 @@
 
 CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言驱动代码阅读、文件修改、命令执行和项目创建。
 
-当前版本：**v0.12.0 — MCP 协议核心**。
+当前版本：**v0.13.0 — MCP 高级能力**。
 
 ## 当前能力
 
@@ -46,6 +46,8 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 - **操作审计**：危险工具按天写入 JSONL 审计记录，可查询批准、拒绝和执行错误及其原因。
 - **MCP 工具接入**：支持 stdio 子进程和 Streamable HTTP MCP Server，将其工具动态注册为 `mcp__{server}__{tool}` 供 Agent 调用。
 - **MCP 服务管理**：启动时合并用户级与项目级配置，支持查看状态、重启、禁用、启用和查看服务端 stderr 日志。
+- **MCP Resources 双轨访问**：Resource Server 自动暴露列表与读取工具；用户也可在普通任务中用 `@server:uri` 显式注入资源内容。
+- **运行中取消与通知**：任务运行时可输入 `/cancel` 请求取消；MCP 工具或资源列表变更通知会更新本地缓存和工具定义。
 
 ## 快速开始
 
@@ -55,7 +57,7 @@ CodeMate 是一个基于 Java 17 的终端 AI 编程助手，通过自然语言�
 Copy-Item .env.example .env
 # 编辑 .env，填写 GLM_API_KEY
 mvn clean package
-java -jar target/codemate-0.12.0.jar
+java -jar target/codemate-0.13.0.jar
 ```
 
 模型配置从 `~/.codemate/config.json`、环境变量和 `.env` 读取。至少配置 `GLM_API_KEY` 或 `DEEPSEEK_API_KEY`；模型名可分别通过 `GLM_MODEL` 和 `DEEPSEEK_MODEL` 指定。`.env` 已加入 Git 忽略规则。
@@ -103,6 +105,9 @@ Web 搜索默认优先复用 `GLM_API_KEY` 选择智谱，也可以通过 `SEARC
 | `/audit [N]` | 查看今日最近 N 条危险工具审计，默认 10、最多 100 |
 | `/mcp` | 查看已配置 MCP 服务的状态与已注册工具数 |
 | `/mcp restart\|logs\|disable\|enable <名称>` | 管理一个 MCP 服务 |
+| `/mcp resources <名称>` | 查看 MCP Server 提供的资源 |
+| `/mcp prompts <名称>` | 查看 MCP Server 提供的 Prompt 模板 |
+| `/cancel` | 请求取消当前正在运行的 Agent 任务 |
 | `/clear` | 清空短期对话历史和本次会话的“全部放行”记录，保留长期记忆 |
 | `/index [路径]` | 为指定路径建立或重建代码索引，默认当前目录 |
 | `/search <查询>` | 使用自然语言混合检索代码 |
@@ -137,6 +142,8 @@ HITL 默认关闭。启用后，统一工具注册表会在危险工具执行前
 
 MCP 配置会合并 `~/.codemate/mcp.json` 与项目根 `.codemate/mcp.json`，项目级同名 Server 会覆盖用户级。stdio Server 使用 `command` 和 `args`，Streamable HTTP Server 使用 `url` 与可选 `headers`。Server 返回的工具会被命名为 `mcp__{server}__{tool}`；它们默认纳入 HITL 审批并写入审计日志。
 
+支持 resources 的 MCP Server 会提供 `mcp__{server}__list_resources` 与 `mcp__{server}__read_resource` 虚拟工具。输入 `@server:protocol://path` 时，CLI 在请求模型前读取资源，并以显式 XML 块加入任务上下文；Prompt 模板目前只支持查看，不会自动注入对话。
+
 ReAct、Plan 的单任务执行器和 Multi-Agent Worker 都通过 `ToolRegistry.executeTools()` 执行一轮工具请求。模型必须把有依赖关系的操作拆到不同轮次；同一轮只适合读取多个文件、列出多个目录等互不依赖的操作。HITL 审批仍会串行读取终端输入，避免多个并发工具同时争抢 stdin/stdout。
 
 切换模型时，主 ReAct Agent 会替换 `LlmClient`，MemoryManager 同步使用新客户端；之后新建的 Plan 和 Multi-Agent 执行器也会使用当前模型。默认 Provider 会写入 `~/.codemate/config.json`，API Key 仍建议放在环境变量或 `.env` 中。
@@ -161,6 +168,7 @@ src/main/java/com/codemate/
 ├── hitl/                 风险分级、审批请求、终端交互与工具拦截
 ├── policy/               路径围栏、命令规则、策略异常与 JSONL 审计
 ├── mcp/                  MCP Client、服务管理、JSON-RPC、配置与传输层
+├── runtime/              任务取消 Token 与运行期取消上下文
 ├── web/                  搜索 Provider、网络策略、网页抓取和正文提取
 ├── util/                 ANSI 样式、Jieba 工厂与终端 Markdown 渲染
 ├── llm/                  统一接口、兼容基类、GLM 与 DeepSeek 客户端
@@ -194,7 +202,7 @@ src/main/java/com/codemate/
 - Java 关系分析基于语法结构和名称匹配，不进行完整的类型与符号求解。
 - HITL 默认关闭；路径与资源限制属于基础安全策略，但没有提供进程隔离，不能把它们等同于沙箱。
 - 命令黑名单只用于快速拦截典型危险形式，不能覆盖编码、间接执行和所有 Shell 语义；危险操作仍应启用 HITL 并由用户审阅。
-- MCP 第一版只将 tool call 的文本内容转换为工具结果；图像、资源等非文本内容会以提示文本返回，尚未实现资源、提示词、OAuth、sampling 或自动重启。
+- MCP 工具调用仍只将文本内容转换为工具结果；图像等非文本结果会以提示文本返回。Prompt 模板只查看不执行，尚未实现 OAuth、sampling、自动重启和进度通知 UI。
 - 尚未实现 MCP。
 
 ## 版本记录
