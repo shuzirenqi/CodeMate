@@ -1,5 +1,14 @@
 # 版本记录
 
+## v0.14.0 — 长上下文与浏览器 MCP
+
+- 新增 `ContextProfile`，根据模型上下文窗口选择 Memory 压缩、RAG Top-K 与 Agent Token 预算策略，并统一格式化 Token 使用量。
+- LLM Client 声明上下文窗口与 Prompt Cache 能力；GLM、DeepSeek 适配对应模型窗口。
+- 首次启动时可生成 Chrome DevTools MCP 默认配置，浏览器 MCP 工具自动注册并纳入 HITL 审批与审计。
+- HITL 增加 MCP Server 维度的会话放行选项；非文本 MCP 返回提供 DOM snapshot 等回退引导。
+
+验证结果：`mvn clean package` 通过，360 个测试全部通过（Windows 环境有 6 个 Stdio Transport 测试按条件跳过）。
+
 ## v0.13.0 — MCP 高级能力
 
 - 新增 MCP resources 缓存与双轨访问：自动注册资源列表/读取虚拟工具，也支持 `@server:uri` 在普通任务中内联资源内容。

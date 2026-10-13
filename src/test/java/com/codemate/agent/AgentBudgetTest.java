@@ -1,6 +1,7 @@
 package com.codemate.agent;
 
 import com.codemate.llm.LlmClient;
+import com.codemate.llm.GLMClient;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -86,6 +87,30 @@ class AgentBudgetTest {
         String message = budget.describeExit(AgentBudget.ExitReason.TOKEN_BUDGET_EXCEEDED);
         assertTrue(message.contains("120"));
         assertTrue(message.contains("100"));
+    }
+
+    @Test
+    void defaultTokenBudgetUsesCurrentModelWindow() {
+        AgentBudget budget = AgentBudget.fromLlmClient(new GLMClient("test-key"));
+
+        assertEquals(160_000, budget.tokenBudget());
+    }
+
+    @Test
+    void systemPropertyCanStillOverrideDynamicTokenBudget() {
+        String old = System.getProperty("codemate.react.token.budget");
+        try {
+            System.setProperty("codemate.react.token.budget", "12345");
+            AgentBudget budget = AgentBudget.fromLlmClient(new GLMClient("test-key"));
+
+            assertEquals(12345, budget.tokenBudget());
+        } finally {
+            if (old == null) {
+                System.clearProperty("codemate.react.token.budget");
+            } else {
+                System.setProperty("codemate.react.token.budget", old);
+            }
+        }
     }
 
     private LlmClient.ToolCall toolCall(String name, String args) {

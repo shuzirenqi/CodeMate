@@ -2,8 +2,8 @@
 
 ## 当前阶段
 
-- v0.13.0：在既有能力上新增 MCP resources 双轨访问、`@` 资源引用、Server 通知处理和运行中任务取消；Java 17、Maven。
-- 入口：`com.codemate.cli.Main`；产物：`target/codemate-0.13.0.jar`。
+- v0.14.0：在既有能力上新增模型上下文策略、Token 使用量展示与 Chrome DevTools MCP 默认接入；Java 17、Maven。
+- 入口：`com.codemate.cli.Main`；产物：`target/codemate-0.14.0.jar`。
 - 版本能力与验证记录见 `CHANGELOG.md`，来源信息见 `NOTICE.md`。
 - 参照仓库只用于读取阶段快照，不修改其工作区。
 
